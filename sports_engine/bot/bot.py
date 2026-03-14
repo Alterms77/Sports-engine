@@ -25,7 +25,11 @@ from telegram.ext import (
 )
 
 from update_matches import update_matches
-from sports.football import get_full_prediction, suggest_teams
+from sports.football import (
+    get_full_prediction,
+    suggest_teams,
+    get_team_stats_summary,
+)
 from core.teams import normalize_team
 from core.config import TELEGRAM_TOKEN, validate_config
 
@@ -87,26 +91,64 @@ def _best_pick(pred: dict) -> str:
     return f"{best} ({options[best]:.1f}%)"
 
 
+def _h2h_line(pred: dict) -> str:
+    """Format the H2H record line for display."""
+    h2h = pred.get("h2h", {})
+    n = h2h.get("total", 0)
+    if n < 3:
+        return ""
+    home_name = pred["home"].split()[0] if pred["home"] else "Local"
+    hw = h2h["home_wins"]
+    d = h2h["draws"]
+    aw = h2h["away_wins"]
+    avg_g = h2h.get("avg_goals", 0)
+    return (
+        f"\n🔄 *H2H* (últimos {n} enfrentamientos)\n"
+        f"  {home_name} {hw}-{d}-{aw} | Prom. {avg_g} goles\n"
+    )
+
+
 def format_prediction(pred: dict) -> str:
     conf = pred["confidence"]
     emoji = _confidence_emoji(conf)
+    league = pred.get("league", "")
+    league_str = f" _({league})_" if league and league != "default" else ""
 
     # Top scoreline
     top_score = pred["top_scores"][0] if pred.get("top_scores") else ("?", 0)
     score_str = f"{top_score[0]} ({top_score[1]:.1f}%)"
+
+    # Form section
+    fh = pred.get("form_home", {})
+    fa = pred.get("form_away", {})
+    form_home_str = f"{fh.get('emoji','➡️')} {fh.get('last5','-----')}"
+    form_away_str = f"{fa.get('emoji','➡️')} {fa.get('last5','-----')}"
+
+    # H2H section
+    h2h_section = _h2h_line(pred)
 
     # Value bets (only shown if user supplied odds)
     value_lines = []
     for market, val in (pred.get("value_bets") or {}).items():
         if val and val > 0:
             value_lines.append(f"  ✅ {market.capitalize()}: +{val:.3f}")
-    value_section = "\n💰 Value Bets\n" + "\n".join(value_lines) if value_lines else ""
+    value_section = "\n💰 *Value Bets*\n" + "\n".join(value_lines) if value_lines else ""
+
+    # Clean sheet probabilities
+    cs_home = pred.get("clean_sheet_home")
+    cs_away = pred.get("clean_sheet_away")
+    cs_str = ""
+    if cs_home is not None and cs_away is not None:
+        cs_str = (
+            f"\n🔒 *Clean Sheet*\n"
+            f"  {pred['home'].split()[0]}: {cs_home*100:.0f}% | "
+            f"{pred['away'].split()[0]}: {cs_away*100:.0f}%\n"
+        )
 
     return (
-        f"⚽ *{pred['home']} vs {pred['away']}*\n\n"
+        f"⚽ *{pred['home']} vs {pred['away']}*{league_str}\n\n"
         f"📊 *xG Esperado*\n"
-        f"  Local: `{pred['xg_home']}`\n"
-        f"  Visitante: `{pred['xg_away']}`\n\n"
+        f"  Local: `{pred['xg_home']}`  Visitante: `{pred['xg_away']}`\n\n"
         f"🏆 *Probabilidades 1X2*\n"
         f"  Local: `{pred['home_win']:.1f}%`\n"
         f"  Empate: `{pred['draw']:.1f}%`\n"
@@ -117,8 +159,12 @@ def format_prediction(pred: dict) -> str:
         f"  Over 2.5: `{pred['over_2_5']}%`\n"
         f"  Over 3.5: `{pred['over_3_5']}%`\n"
         f"  BTTS: `{pred['btts']}%`\n\n"
-        f"🚩 Córners esperados: `{pred['corners']}`\n"
-        f"🟨 Tarjetas esperadas: `{pred['cards']}`\n"
+        f"📈 *Forma reciente*\n"
+        f"  {pred['home'].split()[0]}: {form_home_str}\n"
+        f"  {pred['away'].split()[0]}: {form_away_str}\n"
+        f"{h2h_section}"
+        f"{cs_str}"
+        f"🚩 Córners: `{pred['corners']}`  🟨 Tarjetas: `{pred['cards']}`\n"
         f"{value_section}\n\n"
         f"💡 *Mejor Pick:* {_best_pick(pred)}\n"
         f"{emoji} *Confianza:* {conf}"
@@ -136,11 +182,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Comandos disponibles:\n"
         "  /today — partidos del día\n"
         "  /predict LOCAL vs VISITANTE — predicción completa\n"
-        "  /value LOCAL vs VISITANTE CUOTA\\_LOCAL CUOTA\\_EMPATE CUOTA\\_VISITANTE\n"
-        "  /help — ayuda\n\n"
-        "Ejemplo:\n"
+        "  /value LOCAL vs VISITANTE C\\_LOCAL C\\_EMPATE C\\_VISIT — value bets\n"
+        "  /stats EQUIPO — estadísticas de un equipo\n"
+        "  /help — ayuda detallada\n\n"
+        "Ejemplos:\n"
         "`/predict América vs Chivas`\n"
-        "`/value América vs Chivas 1.80 3.40 4.50`",
+        "`/stats Barcelona`",
         parse_mode="Markdown",
     )
 
@@ -150,19 +197,27 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📖 *Ayuda — Sports Engine*\n\n"
         "*Comandos:*\n\n"
         "🔹 `/start` — Mensaje de bienvenida\n\n"
-        "🔹 `/today` — Lista los partidos cargados para hoy y los próximos días\n\n"
+        "🔹 `/today` — Lista los partidos cargados para hoy\n\n"
         "🔹 `/predict LOCAL vs VISITANTE`\n"
-        "  Genera una predicción completa con xG, probabilidades 1X2, mercados "
-        "(Over, BTTS), marcador más probable, córners, tarjetas y nivel de confianza.\n"
+        "  Predicción completa: xG, 1X2, Over/BTTS, marcador probable,\n"
+        "  forma reciente (últimos 5), H2H, córners, tarjetas y confianza.\n"
+        "  Auto-detecta la liga para ajustar la ventaja local.\n"
         "  _Ejemplo:_ `/predict Real Madrid vs Barcelona`\n\n"
+        "🔹 `/stats EQUIPO`\n"
+        "  Muestra estadísticas de un equipo: ataque/defensa local y visitante,\n"
+        "  forma reciente y probabilidad de clean sheet.\n"
+        "  _Ejemplo:_ `/stats Bayern Munich`\n\n"
         "🔹 `/value LOCAL vs VISITANTE C\\_LOCAL C\\_EMPATE C\\_VISIT`\n"
-        "  Analiza si hay value en las cuotas que proporciones.\n"
+        "  Calcula el valor esperado de cada resultado con las cuotas dadas.\n"
         "  _Ejemplo:_ `/value Liverpool vs Chelsea 1.90 3.50 4.20`\n\n"
         "*Indicadores de confianza:*\n"
         "  🟢 ALTA — probabilidad ≥ 55%\n"
         "  🟡 MEDIA — probabilidad ≥ 42%\n"
         "  🔴 BAJA — probabilidad < 42%\n\n"
-        "_Powered by Dixon-Coles + Monte Carlo (50k sims)_",
+        "*Indicadores de forma:*\n"
+        "  🔥 Racha ganadora larga  📈 Buen momento\n"
+        "  ➡️ Sin racha clara  📉 Mal momento  ❄️ Racha perdedora larga\n\n"
+        "_Motor: Home/Away Split + Dixon-Coles + Monte Carlo 50k + Decay Form + H2H_",
         parse_mode="Markdown",
     )
 
@@ -318,6 +373,71 @@ def main():
 
     validate_config()
 
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /stats EQUIPO
+    Shows home/away attack+defense, recent form, streak, and clean sheet prob.
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso:\n`/stats EQUIPO`\n\nEjemplo:\n`/stats Bayern Munich`",
+            parse_mode="Markdown",
+        )
+        return
+
+    team_name = " ".join(context.args)
+    s = get_team_stats_summary(team_name)
+
+    if not s:
+        suggestions = suggest_teams(team_name)
+        tip = ""
+        if suggestions:
+            tip = "\n\n¿Quisiste decir?\n" + "\n".join(f"  • {t}" for t in suggestions)
+        await update.message.reply_text(
+            f"❌ Equipo '{team_name}' no encontrado.{tip}"
+        )
+        return
+
+    streak = s["streak"]
+    streak_str = (
+        f"{streak['length']} {'victorias' if streak['type']=='W' else 'derrotas' if streak['type']=='L' else 'empates'} seguidos"
+        if streak["type"] != "none"
+        else "sin racha definida"
+    )
+
+    cs_home_pct = f"{s['cs_home_prob']*100:.0f}%" if s["cs_home_prob"] is not None else "N/A"
+    cs_away_pct = f"{s['cs_away_prob']*100:.0f}%" if s["cs_away_prob"] is not None else "N/A"
+    league_str = f" _{s['league']}_" if s["league"] != "default" else ""
+
+    text = (
+        f"📊 *Stats: {s['name']}*{league_str}\n\n"
+        f"🏠 *En casa* ({s.get('home_games', '?')} partidos)\n"
+        f"  ⚽ Ataque: `{s['home_attack']}` goles/partido\n"
+        f"  🛡️ Defensa: `{s['home_defense']}` concedidos/partido\n"
+        f"  🔒 Clean Sheet: `{cs_home_pct}`\n\n"
+        f"✈️ *Fuera* ({s.get('away_games', '?')} partidos)\n"
+        f"  ⚽ Ataque: `{s['away_attack']}` goles/partido\n"
+        f"  🛡️ Defensa: `{s['away_defense']}` concedidos/partido\n"
+        f"  🔒 Clean Sheet: `{cs_away_pct}`\n\n"
+        f"📈 *Forma reciente* (últimos 5)\n"
+        f"  {s['form_emoji']} `{s['last5']}`\n"
+        f"  Racha: {streak_str}\n"
+    )
+
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+# ===============================
+# 🚀 MAIN
+# ===============================
+
+
+def main():
+    logger.info("🚀 Iniciando Sports Engine Bot…")
+
+    validate_config()
+
     if not TELEGRAM_TOKEN:
         logger.error("TOKEN no está configurado. Saliendo.")
         sys.exit(1)
@@ -335,6 +455,7 @@ def main():
     app.add_handler(CommandHandler("today", today))
     app.add_handler(CommandHandler("predict", predict))
     app.add_handler(CommandHandler("value", value))
+    app.add_handler(CommandHandler("stats", stats))
 
     logger.info("🤖 Bot corriendo correctamente…")
     app.run_polling()

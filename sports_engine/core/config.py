@@ -62,6 +62,144 @@ HOME_ADVANTAGE = {
 MONTE_CARLO_SIMULATIONS = 50_000
 
 
+# ===============================
+# 🗺️ DATASET TEAM → LEAGUE MAPPING
+# Maps exact dataset names (as in matches.csv) to league names.
+# Used for league-specific home advantage and display context.
+# ===============================
+
+DATASET_TEAM_LEAGUES: dict = {
+    # ── Liga MX ──
+    "Club America": "Liga MX",
+    "Guadalajara Chivas": "Liga MX",
+    "Cruz Azul": "Liga MX",
+    "Tigres UANL": "Liga MX",
+    "Monterrey": "Liga MX",
+    "Santos Laguna": "Liga MX",
+    "Pachuca": "Liga MX",
+    "UNAM Pumas": "Liga MX",
+    "Atlas": "Liga MX",
+    "Toluca": "Liga MX",
+    "Queretaro": "Liga MX",
+    "Necaxa": "Liga MX",
+    "Club Tijuana": "Liga MX",
+    "Mazatlan FC": "Liga MX",
+    "Club Leon": "Liga MX",
+    "Juarez": "Liga MX",
+    "Atl. San Luis": "Liga MX",
+    "Chiapas": "Liga MX",
+    "Atlante": "Liga MX",
+    "Veracruz": "Liga MX",
+    "Dorados de Sinaloa": "Liga MX",
+    "Leones Negros": "Liga MX",
+    "Lobos BUAP": "Liga MX",
+    "Monarcas": "Liga MX",
+    # ── Premier League ──
+    "Liverpool": "Premier League",
+    "Bournemouth": "Premier League",
+    "Aston Villa": "Premier League",
+    "Newcastle": "Premier League",
+    "Brighton": "Premier League",
+    "Fulham": "Premier League",
+    "Sunderland": "Premier League",
+    "West Ham": "Premier League",
+    "Arsenal": "Premier League",
+    "Chelsea": "Premier League",
+    "Man City": "Premier League",
+    "Man United": "Premier League",
+    "Tottenham": "Premier League",
+    "Wolves": "Premier League",
+    "Everton": "Premier League",
+    "Brentford": "Premier League",
+    "Crystal Palace": "Premier League",
+    "Nott'm Forest": "Premier League",
+    "Leeds": "Premier League",
+    "Burnley": "Premier League",
+    "Sheffield United": "Premier League",
+    "Luton": "Premier League",
+    # ── La Liga ──
+    "Real Madrid": "La Liga",
+    "Barcelona": "La Liga",
+    "Ath Madrid": "La Liga",
+    "Sevilla": "La Liga",
+    "Valencia": "La Liga",
+    "Betis": "La Liga",
+    "Villarreal": "La Liga",
+    "Sociedad": "La Liga",
+    "Ath Bilbao": "La Liga",
+    "Girona": "La Liga",
+    "Alaves": "La Liga",
+    "Mallorca": "La Liga",
+    "Getafe": "La Liga",
+    "Osasuna": "La Liga",
+    "Vallecano": "La Liga",
+    "Celta": "La Liga",
+    "Espanol": "La Liga",
+    "Oviedo": "La Liga",
+    "Elche": "La Liga",
+    "Levante": "La Liga",
+    # ── Serie A ──
+    "Inter": "Serie A",
+    "Milan": "Serie A",
+    "Juventus": "Serie A",
+    "Napoli": "Serie A",
+    "Roma": "Serie A",
+    "Lazio": "Serie A",
+    "Atalanta": "Serie A",
+    "Fiorentina": "Serie A",
+    "Bologna": "Serie A",
+    "Torino": "Serie A",
+    "Como": "Serie A",
+    "Cremonese": "Serie A",
+    "Genoa": "Serie A",
+    "Udinese": "Serie A",
+    "Sassuolo": "Serie A",
+    "Lecce": "Serie A",
+    "Cagliari": "Serie A",
+    "Empoli": "Serie A",
+    "Verona": "Serie A",
+    "Parma": "Serie A",
+    "Pisa": "Serie A",
+    "Monza": "Serie A",
+    "Salernitana": "Serie A",
+    # ── Bundesliga ──
+    "Bayern Munich": "Bundesliga",
+    "RB Leipzig": "Bundesliga",
+    "Ein Frankfurt": "Bundesliga",
+    "Werder Bremen": "Bundesliga",
+    "Freiburg": "Bundesliga",
+    "Augsburg": "Bundesliga",
+    "Heidenheim": "Bundesliga",
+    "Wolfsburg": "Bundesliga",
+    "Leverkusen": "Bundesliga",
+    "Hoffenheim": "Bundesliga",
+    "Union Berlin": "Bundesliga",
+    "Stuttgart": "Bundesliga",
+    "St Pauli": "Bundesliga",
+    "Dortmund": "Bundesliga",
+    "Mainz": "Bundesliga",
+    "FC Koln": "Bundesliga",
+    "M'gladbach": "Bundesliga",
+    "Hamburg": "Bundesliga",
+}
+
+
+def detect_league(home_team: str, away_team: str) -> str:
+    """
+    Auto-detect the league from the resolved team names.
+    Returns the league name or 'default' if unknown.
+    """
+    league_home = DATASET_TEAM_LEAGUES.get(home_team)
+    league_away = DATASET_TEAM_LEAGUES.get(away_team)
+    if league_home and league_home == league_away:
+        return league_home
+    if league_home:
+        return league_home
+    if league_away:
+        return league_away
+    return "default"
+
+
 def validate_config() -> bool:
     """Validate that required environment variables are set."""
     ok = True
