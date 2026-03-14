@@ -1,3 +1,9 @@
+import os
+from dotenv import load_dotenv
+
+# Cargar variables de entorno
+load_dotenv()
+
 # ===============================
 # 🤖 SPORTS ENGINE TELEGRAM BOT
 # ===============================
@@ -15,25 +21,36 @@ from telegram.ext import (
 )
 
 import csv
-import os
+import sys
 from datetime import datetime
 
 # ===============================
 # 🔧 IMPORT DEL MOTOR DE PREDICCIÓN
 # ===============================
-from sports.football import get_full_prediction
-
-# (Se mantiene el import pero ya no dependemos de él)
-from core.teams import normalize_team
+try:
+    from sports.football import get_full_prediction
+    from core.teams import normalize_team
+except ImportError:
+    print("⚠️ Módulos opcionales no disponibles")
 
 # ===============================
 # 🔑 CONFIGURACIÓN
 # ===============================
 
-TOKEN = "8183332785:AAGOHTrosx5TwECKVwRq5in0BSiY7uF0Nyg"
+# Usar variable de entorno o token directo
+TOKEN = os.getenv("TOKEN", "8183332785:AAGOHTrosx5TwECKVwRq5in0BSiY7uF0Nyg")
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Determinar la ruta correcta
+if os.path.exists("sports_engine"):
+    BASE_DIR = os.path.abspath("sports_engine")
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 DATA_PATH = os.path.join(BASE_DIR, "data", "today_matches.csv")
+
+print(f"📁 BASE_DIR: {BASE_DIR}")
+print(f"📄 DATA_PATH: {DATA_PATH}")
+print(f"🔑 TOKEN cargado: {'Sí' if TOKEN else 'No'}")
 
 # ===============================
 # 🧠 FUNCIONES AUXILIARES
@@ -43,16 +60,20 @@ def load_today_matches():
     matches = []
 
     if not os.path.exists(DATA_PATH):
+        print(f"⚠️ Archivo no encontrado: {DATA_PATH}")
         return matches
 
-    with open(DATA_PATH, newline="", encoding="utf-8") as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            matches.append({
-                "home": row["home"].strip(),
-                "away": row["away"].strip(),
-                "league": row.get("league", "").strip()
-            })
+    try:
+        with open(DATA_PATH, newline="", encoding="utf-8") as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                matches.append({
+                    "home": row["home"].strip(),
+                    "away": row["away"].strip(),
+                    "league": row.get("league", "").strip()
+                })
+    except Exception as e:
+        print(f"❌ Error al cargar partidos: {e}")
 
     return matches
 
@@ -152,9 +173,17 @@ async def predict(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===============================
 
 def main():
+    print("🚀 Iniciando Sports Engine Bot...")
+    
+    # 🔄 actualizar partidos desde API (con manejo de errores)
+    try:
+        update_matches()
+    except Exception as e:
+        print(f"⚠️ Error actualizando partidos: {e}")
 
-    # 🔄 actualizar partidos desde API
-    update_matches()
+    if not TOKEN:
+        print("❌ ERROR: TOKEN no está configurado")
+        sys.exit(1)
 
     app = ApplicationBuilder().token(TOKEN).build()
 
