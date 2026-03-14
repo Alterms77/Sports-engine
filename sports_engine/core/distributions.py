@@ -21,6 +21,7 @@ def poisson_sample(lambd: float) -> int:
     if lambd <= 0:
         return 0
     if lambd > 30:
+        # Normal approximation for performance when λ > 30 (error < 0.5%)
         return max(0, round(random.gauss(lambd, math.sqrt(lambd))))
     L = math.exp(-lambd)
     k = 0

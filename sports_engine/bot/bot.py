@@ -275,7 +275,8 @@ async def value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Calculando value bets…")
 
     try:
-        prediction = get_full_prediction(home, away, odds={"home": odds_home, "draw": odds_draw, "away": odds_away})
+        user_odds = {"home": odds_home, "draw": odds_draw, "away": odds_away}
+        prediction = get_full_prediction(home, away, odds=user_odds)
 
         vb = prediction.get("value_bets", {})
 
@@ -313,11 +314,6 @@ async def value(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    logging.basicConfig(
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        level=logging.INFO,
-    )
-
     logger.info("🚀 Iniciando Sports Engine Bot…")
 
     validate_config()

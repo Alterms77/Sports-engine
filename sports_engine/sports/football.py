@@ -42,7 +42,7 @@ def clean_team_name(name: str) -> str:
 # ===============================
 # 🧠 NORMALIZACIÓN FINAL
 # ===============================
-def resolve_team(name: str):
+def resolve_team(name: str) -> "str | None":
     """Return the canonical team name from TEAM_STATS, or None."""
     canonical = normalize_from_teams(name) or name
     canonical_clean = clean_team_name(canonical)
