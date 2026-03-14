@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+
+# Logs
+*.log
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*.DS_Store
+
+# Data exports / temp
+*.xlsx

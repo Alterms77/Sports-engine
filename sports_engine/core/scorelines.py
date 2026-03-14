@@ -1,19 +1,17 @@
-import math
+from core.distributions import poisson_pmf
 
-def poisson_prob(lmbda, k):
-    return (math.exp(-lmbda) * lmbda ** k) / math.factorial(k)
 
-def scoreline_matrix(xg_home, xg_away, max_goals=5):
+def scoreline_matrix(xg_home: float, xg_away: float, max_goals: int = 5) -> dict:
     results = {}
-
     for h in range(max_goals + 1):
         for a in range(max_goals + 1):
-            p = poisson_prob(xg_home, h) * poisson_prob(xg_away, a)
+            p = poisson_pmf(h, xg_home) * poisson_pmf(a, xg_away)
             results[f"{h}-{a}"] = round(p * 100, 2)
-
     return results
 
-def top_scorelines(xg_home, xg_away, top_n=5):
+
+def top_scorelines(xg_home: float, xg_away: float, top_n: int = 5) -> list:
     matrix = scoreline_matrix(xg_home, xg_away)
     ordered = sorted(matrix.items(), key=lambda x: x[1], reverse=True)
     return ordered[:top_n]
+

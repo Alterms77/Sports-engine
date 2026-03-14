@@ -1,11 +1,21 @@
+import os
+import sys
 import requests
+import logging
 
-API_KEY = "326817dbace2d3e8eadc29be1d404a17"
+logger = logging.getLogger(__name__)
 
-BASE_URL = "https://v3.football.api-sports.io"
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_SPORTS_ENGINE_DIR = os.path.dirname(_THIS_DIR)
+if _SPORTS_ENGINE_DIR not in sys.path:
+    sys.path.insert(0, _SPORTS_ENGINE_DIR)
+
+from core.config import API_SPORTS_KEY, API_SPORTS_BASE_URL
+
+BASE_URL = API_SPORTS_BASE_URL
 
 headers = {
-    "x-apisports-key": API_KEY
+    "x-apisports-key": API_SPORTS_KEY
 }
 
 def get_matches(league_id, season):
