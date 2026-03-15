@@ -223,6 +223,11 @@ def predict_game(home_name: str, away_name: str) -> dict:
     conf = _confidence(lead_prob)
     best_bet = f"Victoria {favoured} ({lead_prob:.1f}%)"
 
+    # ── Extended markets and player props ─────────────────────────────────────
+    from core.props import mlb_player_props, mlb_run_line
+    player_props = mlb_player_props(xr_home, xr_away)
+    run_line = mlb_run_line(xr_home, xr_away)
+
     return {
         "sport": "MLB ⚾",
         "home": home_name,
@@ -240,4 +245,6 @@ def predict_game(home_name: str, away_name: str) -> dict:
         "away_record": away_stats.get("summary", ""),
         "home_era": home_era,
         "away_era": away_era,
+        "player_props": player_props,
+        "run_line": run_line,
     }

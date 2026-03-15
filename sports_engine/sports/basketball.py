@@ -242,6 +242,12 @@ def predict_game(home_name: str, away_name: str) -> dict:
         else f"{away_name} -{abs(expected_margin):.1f}"
     )
 
+    # ── Extended markets and player props ─────────────────────────────────────
+    from core.props import nba_quarter_projections, nba_player_props, nba_game_totals
+    quarters = nba_quarter_projections(expected_home, expected_away)
+    player_props = nba_player_props(home_ppg, away_ppg, home_name, away_name)
+    game_totals = nba_game_totals(expected_home, expected_away)
+
     return {
         "sport": "NBA 🏀",
         "home": home_name,
@@ -262,4 +268,7 @@ def predict_game(home_name: str, away_name: str) -> dict:
         "home_oppg": round(home_oppg, 1),
         "away_ppg": round(away_ppg, 1),
         "away_oppg": round(away_oppg, 1),
+        "quarter_projections": quarters,
+        "player_props": player_props,
+        "game_totals": game_totals,
     }

@@ -161,6 +161,42 @@ def format_prediction(pred: dict) -> str:
             f"{pred['away'].split()[0]}: {cs_away*100:.0f}%\n"
         )
 
+    # Shots on target (new)
+    sot = pred.get("shots_on_target")
+    sot_str = ""
+    if sot:
+        home1 = pred["home"].split()[0]
+        away1 = pred["away"].split()[0]
+        sot_str = (
+            f"👁 *Tiros a puerta*\n"
+            f"  {home1}: `{sot['sot_home']}`  {away1}: `{sot['sot_away']}`  "
+            f"Total: `{sot['sot_total']}` ({sot['suggestion']} {sot['line']})\n\n"
+        )
+
+    # Card detail (new)
+    cd = pred.get("cards_detail")
+    corner_mkt = pred.get("corners_market", {})
+    card_line = ""
+    if cd:
+        home1 = pred["home"].split()[0]
+        away1 = pred["away"].split()[0]
+        over_label = "✅ Over 3.5" if cd["over_3_5_cards"] else "Under 3.5"
+        card_line = (
+            f"🟨 *Tarjetas* — {home1}: `{cd['yellow_home']}A` {away1}: `{cd['yellow_away']}A` "
+            f"🟥 Total rojas: `{cd['total_red']:.2f}` → {over_label}\n"
+        )
+    else:
+        card_line = f"🚩 Córners: `{pred['corners']}`  🟨 Tarjetas: `{pred['cards']}`\n"
+
+    corners_str = ""
+    if corner_mkt:
+        corners_str = (
+            f"🚩 *Córners* — Total esperado: `{corner_mkt['expected']}`  "
+            f"Línea {corner_mkt['line']}: `{corner_mkt['suggestion']}`\n"
+        )
+    else:
+        corners_str = f"🚩 Córners: `{pred['corners']}`\n"
+
     return (
         f"⚽ *{pred['home']} vs {pred['away']}*{league_str}\n\n"
         f"📊 *xG Esperado*\n"
@@ -175,12 +211,14 @@ def format_prediction(pred: dict) -> str:
         f"  Over 2.5: `{pred['over_2_5']}%`\n"
         f"  Over 3.5: `{pred['over_3_5']}%`\n"
         f"  BTTS: `{pred['btts']}%`\n\n"
+        f"{sot_str}"
         f"📈 *Forma reciente*\n"
         f"  {pred['home'].split()[0]}: {form_home_str}\n"
         f"  {pred['away'].split()[0]}: {form_away_str}\n"
         f"{h2h_section}"
         f"{cs_str}"
-        f"🚩 Córners: `{pred['corners']}`  🟨 Tarjetas: `{pred['cards']}`\n"
+        f"{corners_str}"
+        f"{card_line}"
         f"{value_section}\n\n"
         f"💡 *Mejor Pick:* {_best_pick(pred)}\n"
         f"{emoji} *Confianza:* {conf}"
@@ -536,6 +574,31 @@ def _format_sport_prediction(pred: dict) -> str:
             lines.append("📊 *Estadísticas de temporada*")
             lines.append(f"  {home}: `{pred.get('home_ppg', '?')}` PPG / `{pred.get('home_oppg', '?')}` OPPG")
             lines.append(f"  {away}: `{pred.get('away_ppg', '?')}` PPG / `{pred.get('away_oppg', '?')}` OPPG\n")
+
+            # Quarter projections
+            quarters = pred.get("quarter_projections")
+            if quarters:
+                lines.append("📋 *Proyección por cuarto*")
+                lines.append(f"  {'C':<3} {'Local':>6} {'Visit':>6} {'Total':>6}")
+                for q in quarters:
+                    lines.append(
+                        f"  Q{q['quarter']:<2} `{q['home']:>5.1f}` `{q['away']:>5.1f}` `{q['total']:>5.1f}`"
+                    )
+                lines.append("")
+
+            # Player props
+            pp = pred.get("player_props", {})
+            if pp:
+                home_pp = pp.get("home", {})
+                away_pp = pp.get("away", {})
+                lines.append("🎲 *Props de jugador (líneas estimadas)*")
+                lines.append(f"  📌 Estrella pts: {home} `{home_pp.get('star_points', '?')}` / {away} `{away_pp.get('star_points', '?')}`")
+                lines.append(f"  📌 2° anotador:  {home} `{home_pp.get('2nd_scorer', '?')}` / {away} `{away_pp.get('2nd_scorer', '?')}`")
+                lines.append(f"  🎯 Asistencias PG: {home} `{home_pp.get('assists', '?')}` / {away} `{away_pp.get('assists', '?')}`")
+                lines.append(f"  💪 Rebotes (C):  {home} `{home_pp.get('rebounds_big', '?')}` / {away} `{away_pp.get('rebounds_big', '?')}`")
+                lines.append(f"  🔄 Rebotes (ala): {home} `{home_pp.get('rebounds_wing', '?')}` / {away} `{away_pp.get('rebounds_wing', '?')}`")
+                lines.append("")
+
         elif sport_key == "NFL":
             lines.append("🎯 *Marcador proyectado*")
             lines.append(f"  {home}: `{pred['expected_home']:.0f}` pts")
@@ -547,6 +610,35 @@ def _format_sport_prediction(pred: dict) -> str:
             lines.append("📊 *Estadísticas de temporada*")
             lines.append(f"  {home}: `{pred.get('home_ppg', '?')}` PPG / `{pred.get('home_oppg', '?')}` OPPG")
             lines.append(f"  {away}: `{pred.get('away_ppg', '?')}` PPG / `{pred.get('away_oppg', '?')}` OPPG\n")
+
+            # Quarter projections
+            quarters = pred.get("quarter_projections")
+            if quarters:
+                lines.append("📋 *Proyección por cuarto*")
+                lines.append(f"  {'Q':<3} {'Local':>6} {'Visit':>6} {'Total':>6}")
+                for q in quarters:
+                    lines.append(
+                        f"  Q{q['quarter']:<2} `{q['home']:>5.1f}` `{q['away']:>5.1f}` `{q['total']:>5.1f}`"
+                    )
+                lines.append("")
+
+            # Player props
+            pp = pred.get("player_props", {})
+            if pp:
+                home_pp = pp.get("home", {})
+                away_pp = pp.get("away", {})
+                lines.append("🎲 *Props de jugador QB (líneas estimadas)*")
+                lines.append(f"  🏈 Yardas pase:  {home} `{home_pp.get('qb_pass_yards', '?'):.0f}` / {away} `{away_pp.get('qb_pass_yards', '?'):.0f}`")
+                lines.append(f"  🎯 TDs pase:      {home} `{home_pp.get('qb_pass_tds', '?')}` / {away} `{away_pp.get('qb_pass_tds', '?')}`")
+                lines.append(f"  ✅ Compleciones:  {home} `{home_pp.get('qb_completions', '?'):.0f}` / {away} `{away_pp.get('qb_completions', '?'):.0f}`")
+                lines.append(f"  🏃 Yardas tierra: {home} `{home_pp.get('rb_rush_yards', '?'):.0f}` / {away} `{away_pp.get('rb_rush_yards', '?'):.0f}`")
+                lines.append(f"  🏃 TDs tierra:    {home} `{home_pp.get('rb_rush_tds', '?')}` / {away} `{away_pp.get('rb_rush_tds', '?')}`")
+                lines.append(f"  🙌 Recepciones RB:{home} `{home_pp.get('rb_receptions', '?')}` / {away} `{away_pp.get('rb_receptions', '?')}`")
+                lines.append(f"  📡 Yardas WR1:    {home} `{home_pp.get('wr1_recv_yards', '?'):.0f}` / {away} `{away_pp.get('wr1_recv_yards', '?'):.0f}`")
+                lines.append(f"  📡 Recepciones WR:{home} `{home_pp.get('wr1_receptions', '?')}` / {away} `{away_pp.get('wr1_receptions', '?')}`")
+                lines.append(f"  🎯 TDs WR1:       {home} `{home_pp.get('wr1_recv_tds', '?')}` / {away} `{away_pp.get('wr1_recv_tds', '?')}`")
+                lines.append("")
+
         elif sport_key == "MLB":
             lines.append("🎯 *Carreras proyectadas*")
             lines.append(f"  {home}: `{pred['expected_home']}` runs")
@@ -554,7 +646,26 @@ def _format_sport_prediction(pred: dict) -> str:
             lines.append(f"  Over/Under: `{pred['over_under']}` runs")
             if pred.get("home_era"):
                 lines.append(f"  ERA pitcheo — {home}: `{pred['home_era']}` / {away}: `{pred.get('away_era', '?')}`")
+
+            # Run line (MLB spread equivalent)
+            rl = pred.get("run_line", {})
+            if rl:
+                fav_side = rl.get("fav_side", "")
+                fav_name = home if fav_side == "home" else away
+                lines.append(f"  Run line (-1.5): `{fav_name}` cubre `{rl.get('cover_prob', '?')}%`")
             lines.append("")
+
+            # Player props
+            pp = pred.get("player_props", {})
+            if pp:
+                home_pp = pp.get("home", {})
+                away_pp = pp.get("away", {})
+                lines.append("🎲 *Props de jugador (líneas estimadas)*")
+                lines.append(f"  🎽 Hits equipo:    {home} `{home_pp.get('team_hits', '?')}` / {away} `{away_pp.get('team_hits', '?')}`")
+                lines.append(f"  ⚾ Hits cleanup:   {home} `{home_pp.get('cleanup_hits', '?')}` / {away} `{away_pp.get('cleanup_hits', '?')}`")
+                lines.append(f"  💣 HR cleanup:     {home} `{home_pp.get('cleanup_hr', '?')}` / {away} `{away_pp.get('cleanup_hr', '?')}`")
+                lines.append(f"  🔥 Ks abridor:     {home} `{home_pp.get('ace_strikeouts', '?')}` Ks / {away} `{away_pp.get('ace_strikeouts', '?')}` Ks")
+                lines.append("")
 
     # Tennis-specific
     if "Tenis" in sport:
@@ -575,13 +686,16 @@ async def sports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/sports — List all available sport commands."""
     await update.message.reply_text(
         "🏟️ *Sports Engine — Todos los comandos*\n\n"
-        "⚽ *Fútbol*\n"
+        "⚽ *Fútbol* — mercados completos incl. tiros a puerta, tarjetas y córners\n"
         "  `/predict LOCAL vs VISITANTE`\n"
         "  `/value LOCAL vs VISITANTE C\\_L C\\_E C\\_V`\n"
         "  `/stats EQUIPO`\n\n"
-        "🏀 *NBA* — `/nba LOCAL vs VISITANTE`\n"
-        "⚾ *MLB* — `/mlb LOCAL vs VISITANTE`\n"
-        "🏈 *NFL* — `/nfl LOCAL vs VISITANTE`\n"
+        "🏀 *NBA* — spread, O/U, cuartos, props (pts/reb/ast)\n"
+        "  `/nba LOCAL vs VISITANTE`\n\n"
+        "⚾ *MLB* — carreras, run-line, hits equipo, HR y Ks del abridor\n"
+        "  `/mlb LOCAL vs VISITANTE`\n\n"
+        "🏈 *NFL* — spread, O/U, cuartos, props QB/RB/WR\n"
+        "  `/nfl LOCAL vs VISITANTE`\n\n"
         "🎾 *Tenis* — `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
         "📡 *Datos en vivo*\n"
         "  `/live [deporte]` — marcadores en vivo ahora\n"
@@ -590,6 +704,7 @@ async def sports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  `/tabla LIGA` — clasificación\n\n"
         "📅 `/today` — agenda multideporte\n"
         "❓ `/help` — ayuda detallada\n\n"
+        "_Props basados en promedios de liga escalados al rendimiento del equipo._\n"
         "_Fuentes: SofaScore · TheSportsDB · ESPN_",
         parse_mode="Markdown",
     )

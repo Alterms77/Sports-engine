@@ -221,6 +221,11 @@ def predict_game(home_name: str, away_name: str) -> dict:
     )
     best_bet = f"Victoria {favoured} ({lead_prob:.1f}%)"
 
+    # ── Extended markets and player props ─────────────────────────────────────
+    from core.props import nfl_quarter_projections, nfl_player_props
+    quarters = nfl_quarter_projections(expected_home, expected_away)
+    player_props = nfl_player_props(expected_home, expected_away)
+
     return {
         "sport": "NFL 🏈",
         "home": home_name,
@@ -241,4 +246,6 @@ def predict_game(home_name: str, away_name: str) -> dict:
         "home_oppg": round(home_oppg, 1),
         "away_ppg": round(away_ppg, 1),
         "away_oppg": round(away_oppg, 1),
+        "quarter_projections": quarters,
+        "player_props": player_props,
     }

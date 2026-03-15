@@ -14,8 +14,9 @@ from core.stats import (
 )
 from core.probabilities import match_probabilities
 from core.scorelines import top_scorelines
-from core.corners import expected_corners
+from core.corners import expected_corners, corners_market
 from core.cards import expected_cards
+from core.props import football_shots_on_target, football_cards_detail
 from core.confidence import confidence_level
 from core.simulation import simulate_scoreline
 from core.value import detect_value_bets
@@ -424,7 +425,10 @@ def predict_match(
         "sim_home_goals": simulation["avg_home_goals"],
         "sim_away_goals": simulation["avg_away_goals"],
         "corners": expected_corners(xg_home, xg_away),
+        "corners_market": corners_market(expected_corners(xg_home, xg_away)),
         "cards": expected_cards(xg_home, xg_away),
+        "shots_on_target": football_shots_on_target(xg_home, xg_away),
+        "cards_detail": football_cards_detail(xg_home, xg_away),
         "value_bets": value,
         "confidence": confidence_level(final_probs),
         # ── Intelligence context for display ──
