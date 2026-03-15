@@ -9,7 +9,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 # ===============================
-# 🔑 SECRETS (from environment only — no fallbacks)
+# 🔑 SECRETS (loaded from environment; empty string signals "not set"
+#             and is checked / rejected by validate_config())
 # ===============================
 
 TELEGRAM_TOKEN: str = os.getenv("TOKEN", "")
@@ -20,6 +21,10 @@ API_SPORTS_KEY: str = os.getenv("API_SPORTS_KEY", "")
 # ===============================
 
 API_SPORTS_BASE_URL = "https://v3.football.api-sports.io"
+
+# ── ESPN (free public API, no key needed) ───────────────────────────────────
+ESPN_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports"
+ESPN_CACHE_TTL = 1800  # seconds (30 min)
 
 # ===============================
 # ⚽ LEAGUE IDs

@@ -30,6 +30,11 @@ from sports.football import (
     suggest_teams,
     get_team_stats_summary,
 )
+import sports.basketball as _bball
+import sports.baseball as _baseball
+import sports.tennis as _tennis
+import sports.american_football as _nfl
+from api.espn_api import get_all_scoreboards
 from core.teams import normalize_team
 from core.config import TELEGRAM_TOKEN, validate_config
 
@@ -178,16 +183,19 @@ def format_prediction(pred: dict) -> str:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 *Sports Engine*\n\n"
-        "Comandos disponibles:\n"
-        "  /today — partidos del día\n"
-        "  /predict LOCAL vs VISITANTE — predicción completa\n"
-        "  /value LOCAL vs VISITANTE C\\_LOCAL C\\_EMPATE C\\_VISIT — value bets\n"
-        "  /stats EQUIPO — estadísticas de un equipo\n"
-        "  /help — ayuda detallada\n\n"
-        "Ejemplos:\n"
+        "🤖 *Sports Engine — Multi-Sport Bot*\n\n"
+        "⚽ Fútbol: `/predict LOCAL vs VISITANTE`\n"
+        "🏀 NBA: `/nba LOCAL vs VISITANTE`\n"
+        "⚾ MLB: `/mlb LOCAL vs VISITANTE`\n"
+        "🏈 NFL: `/nfl LOCAL vs VISITANTE`\n"
+        "🎾 Tenis: `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
+        "📅 `/today` — todos los partidos de hoy\n"
+        "🏟️ `/sports` — ver todos los comandos\n"
+        "❓ `/help` — ayuda detallada\n\n"
+        "_Ejemplos:_\n"
         "`/predict América vs Chivas`\n"
-        "`/stats Barcelona`",
+        "`/nba Lakers vs Celtics`\n"
+        "`/tennis Djokovic vs Alcaraz clay`",
         parse_mode="Markdown",
     )
 
@@ -195,45 +203,80 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📖 *Ayuda — Sports Engine*\n\n"
-        "*Comandos:*\n\n"
-        "🔹 `/start` — Mensaje de bienvenida\n\n"
-        "🔹 `/today` — Lista los partidos cargados para hoy\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "⚽ *FÚTBOL*\n"
         "🔹 `/predict LOCAL vs VISITANTE`\n"
-        "  Predicción completa: xG, 1X2, Over/BTTS, marcador probable,\n"
-        "  forma reciente (últimos 5), H2H, córners, tarjetas y confianza.\n"
-        "  Auto-detecta la liga para ajustar la ventaja local.\n"
-        "  _Ejemplo:_ `/predict Real Madrid vs Barcelona`\n\n"
+        "  xG, 1X2, Over/BTTS, marcador probable, forma, H2H, córners, tarjetas.\n"
+        "  _Ej:_ `/predict Real Madrid vs Barcelona`\n\n"
         "🔹 `/stats EQUIPO`\n"
-        "  Muestra estadísticas de un equipo: ataque/defensa local y visitante,\n"
-        "  forma reciente y probabilidad de clean sheet.\n"
-        "  _Ejemplo:_ `/stats Bayern Munich`\n\n"
-        "🔹 `/value LOCAL vs VISITANTE C\\_LOCAL C\\_EMPATE C\\_VISIT`\n"
-        "  Calcula el valor esperado de cada resultado con las cuotas dadas.\n"
-        "  _Ejemplo:_ `/value Liverpool vs Chelsea 1.90 3.50 4.20`\n\n"
-        "*Indicadores de confianza:*\n"
-        "  🟢 ALTA — probabilidad ≥ 55%\n"
-        "  🟡 MEDIA — probabilidad ≥ 42%\n"
-        "  🔴 BAJA — probabilidad < 42%\n\n"
-        "*Indicadores de forma:*\n"
-        "  🔥 Racha ganadora larga  📈 Buen momento\n"
-        "  ➡️ Sin racha clara  📉 Mal momento  ❄️ Racha perdedora larga\n\n"
-        "_Motor: Home/Away Split + Dixon-Coles + Monte Carlo 50k + Decay Form + H2H_",
+        "  Ataque/defensa local y visitante, forma y clean sheet rate.\n"
+        "  _Ej:_ `/stats Bayern Munich`\n\n"
+        "🔹 `/value LOCAL vs VISITANTE C\\_L C\\_E C\\_V`\n"
+        "  Value bets con tus cuotas.\n"
+        "  _Ej:_ `/value Liverpool vs Chelsea 1.90 3.50 4.20`\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🏀 *BASQUETBOL (NBA)*\n"
+        "🔹 `/nba LOCAL vs VISITANTE`\n"
+        "  Prob. victoria, marcador proyectado, spread, over/under.\n"
+        "  _Ej:_ `/nba Lakers vs Celtics`\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "⚾ *BÉISBOL (MLB)*\n"
+        "🔹 `/mlb LOCAL vs VISITANTE`\n"
+        "  Carreras proyectadas, Pythagorean win%, over/under.\n"
+        "  _Ej:_ `/mlb Yankees vs Red Sox`\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🏈 *FÚTBOL AMERICANO (NFL)*\n"
+        "🔹 `/nfl LOCAL vs VISITANTE`\n"
+        "  Prob. victoria, puntos proyectados, spread, over/under.\n"
+        "  _Ej:_ `/nfl Chiefs vs Eagles`\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🎾 *TENIS (ATP/WTA)*\n"
+        "🔹 `/tennis J1 vs J2 [clay/grass/hard]`\n"
+        "  Elo-based win probability, ajuste por superficie.\n"
+        "  _Ej:_ `/tennis Djokovic vs Alcaraz clay`\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "*Confianza:* 🟢 ALTA ≥55% | 🟡 MEDIA ≥42% | 🔴 BAJA\n"
+        "*Forma:* 🔥📈➡️📉❄️\n\n"
+        "_Motor: Home/Away Split + Dixon-Coles + Monte Carlo + Decay Form + H2H + ESPN API_",
         parse_mode="Markdown",
     )
 
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    matches = load_today_matches()
+    """Show today's football matches (local CSV) + live ESPN schedule for all sports."""
+    # ── Local football matches ──
+    football_matches = load_today_matches()
 
-    if not matches:
-        await update.message.reply_text("📭 No hay partidos cargados para hoy.")
-        return
+    text = "📅 *Partidos de hoy*\n\n"
 
-    text = "📅 *Partidos disponibles*\n\n"
+    if football_matches:
+        text += "⚽ *Fútbol*\n"
+        for m in football_matches:
+            league = f" _{m['league']}_" if m["league"] else ""
+            text += f"  • {m['home']} vs {m['away']}{league}\n"
+        text += "\n"
 
-    for m in matches:
-        league = f" _{m['league']}_" if m["league"] else ""
-        text += f"• {m['home']} vs {m['away']}{league}\n"
+    # ── ESPN multi-sport schedule ──
+    try:
+        espn_games = get_all_scoreboards()
+        by_sport: dict = {}
+        for g in espn_games:
+            by_sport.setdefault(g["sport"], []).append(g)
+
+        sport_emojis = {"NBA": "🏀", "NFL": "🏈", "MLB": "⚾", "ATP": "🎾"}
+        for sport, games in by_sport.items():
+            emoji = sport_emojis.get(sport, "🏟️")
+            text += f"{emoji} *{sport}*\n"
+            for g in games[:8]:  # cap at 8 per sport
+                score = f" `{g['home_score']}-{g['away_score']}`" if g.get("home_score") and g.get("away_score") else ""
+                status = f" _{g['status']}_" if g.get("status") and g["status"] != "Scheduled" else ""
+                text += f"  • {g['home']} vs {g['away']}{score}{status}\n"
+            text += "\n"
+    except Exception as exc:
+        logger.warning("ESPN scoreboard unavailable: %s", exc)
+
+    if not football_matches and not text.strip().endswith("*\n"):
+        text += "📭 No hay partidos disponibles.\n\nUsa `/sports` para ver todos los comandos."
 
     await update.message.reply_text(text, parse_mode="Markdown")
 
@@ -363,16 +406,10 @@ async def value(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error: {e}")
 
 
+
 # ===============================
-# 🚀 MAIN
+# 📌 COMMANDS — Football/Soccer
 # ===============================
-
-
-def main():
-    logger.info("🚀 Iniciando Sports Engine Bot…")
-
-    validate_config()
-
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -429,6 +466,257 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ===============================
+# 📌 COMMANDS — Multi-sport
+# ===============================
+
+def _format_sport_prediction(pred: dict) -> str:
+    """
+    Generic formatter for non-football sport predictions.
+    Handles NBA, NFL, MLB, and Tennis.
+    """
+    sport = pred.get("sport", "")
+    home = pred["home"]
+    away = pred["away"]
+    conf = pred.get("confidence", "BAJA")
+    conf_emoji = _confidence_emoji(conf)
+
+    live_note = "" if pred.get("live_data") else "\n⚠️ _Sin datos ESPN — usando promedios de liga_"
+
+    # Records
+    home_rec = f" `{pred['home_record']}`" if pred.get("home_record") else ""
+    away_rec = f" `{pred['away_record']}`" if pred.get("away_record") else ""
+
+    lines = [f"*{sport}*", f"*{home}{home_rec}* vs *{away}{away_rec}*\n"]
+
+    # Win probabilities
+    lines.append("🏆 *Probabilidades*")
+    lines.append(f"  {home}: `{pred['home_win']:.1f}%`")
+    lines.append(f"  {away}: `{pred['away_win']:.1f}%`\n")
+
+    # Sport-specific score/spread block
+    if pred.get("expected_home") is not None:
+        sport_key = sport.split()[0]
+        if sport_key == "NBA":
+            lines.append("🎯 *Marcador proyectado*")
+            lines.append(f"  {home}: `{pred['expected_home']:.0f}` pts")
+            lines.append(f"  {away}: `{pred['expected_away']:.0f}` pts")
+            lines.append(f"  Over/Under: `{pred['over_under']}` pts")
+            if pred.get("spread_str"):
+                lines.append(f"  Spread: `{pred['spread_str']}`")
+            lines.append("")
+            lines.append("📊 *Estadísticas de temporada*")
+            lines.append(f"  {home}: `{pred.get('home_ppg', '?')}` PPG / `{pred.get('home_oppg', '?')}` OPPG")
+            lines.append(f"  {away}: `{pred.get('away_ppg', '?')}` PPG / `{pred.get('away_oppg', '?')}` OPPG\n")
+        elif sport_key == "NFL":
+            lines.append("🎯 *Marcador proyectado*")
+            lines.append(f"  {home}: `{pred['expected_home']:.0f}` pts")
+            lines.append(f"  {away}: `{pred['expected_away']:.0f}` pts")
+            lines.append(f"  Over/Under: `{pred['over_under']}` pts")
+            if pred.get("spread_str"):
+                lines.append(f"  Spread: `{pred['spread_str']}`")
+            lines.append("")
+            lines.append("📊 *Estadísticas de temporada*")
+            lines.append(f"  {home}: `{pred.get('home_ppg', '?')}` PPG / `{pred.get('home_oppg', '?')}` OPPG")
+            lines.append(f"  {away}: `{pred.get('away_ppg', '?')}` PPG / `{pred.get('away_oppg', '?')}` OPPG\n")
+        elif sport_key == "MLB":
+            lines.append("🎯 *Carreras proyectadas*")
+            lines.append(f"  {home}: `{pred['expected_home']}` runs")
+            lines.append(f"  {away}: `{pred['expected_away']}` runs")
+            lines.append(f"  Over/Under: `{pred['over_under']}` runs")
+            if pred.get("home_era"):
+                lines.append(f"  ERA pitcheo — {home}: `{pred['home_era']}` / {away}: `{pred.get('away_era', '?')}`")
+            lines.append("")
+
+    # Tennis-specific
+    if "Tenis" in sport:
+        lines.append(f"🎾 *Superficie:* {pred.get('surface', 'hard').capitalize()}")
+        lines.append(f"📏 *Formato:* Mejor de {pred.get('best_of', 3)}")
+        lines.append(f"📊 *Elo aproximado*")
+        lines.append(f"  {home}: `{pred.get('elo_p1', '?')}`")
+        lines.append(f"  {away}: `{pred.get('elo_p2', '?')}`\n")
+
+    lines.append(f"💡 *Mejor Pick:* {pred['best_bet']}")
+    lines.append(f"{conf_emoji} *Confianza:* {conf}")
+    lines.append(live_note)
+
+    return "\n".join(lines)
+
+
+async def sports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/sports — List all available sport commands."""
+    await update.message.reply_text(
+        "🏟️ *Sports Engine — Deportes disponibles*\n\n"
+        "⚽ *Fútbol*\n"
+        "  `/predict LOCAL vs VISITANTE` — predicción completa\n"
+        "  `/value LOCAL vs VISITANTE C\\_L C\\_E C\\_V` — value bets\n"
+        "  `/stats EQUIPO` — estadísticas del equipo\n\n"
+        "🏀 *Basquetbol (NBA)*\n"
+        "  `/nba LOCAL vs VISITANTE`\n"
+        "  _Ej:_ `/nba Lakers vs Celtics`\n\n"
+        "⚾ *Béisbol (MLB)*\n"
+        "  `/mlb LOCAL vs VISITANTE`\n"
+        "  _Ej:_ `/mlb Yankees vs Red Sox`\n\n"
+        "🏈 *Fútbol Americano (NFL)*\n"
+        "  `/nfl LOCAL vs VISITANTE`\n"
+        "  _Ej:_ `/nfl Chiefs vs Eagles`\n\n"
+        "🎾 *Tenis (ATP/WTA)*\n"
+        "  `/tennis J1 vs J2 [clay/grass/hard]`\n"
+        "  _Ej:_ `/tennis Djokovic vs Alcaraz clay`\n\n"
+        "📅 `/today` — partidos de hoy en todos los deportes\n"
+        "❓ `/help` — ayuda detallada",
+        parse_mode="Markdown",
+    )
+
+
+async def nba(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/nba HOME vs AWAY — NBA game prediction."""
+    if not context.args or " vs " not in " ".join(context.args).lower():
+        await update.message.reply_text(
+            "❌ Formato:\n`/nba LOCAL vs VISITANTE`\n\n_Ej:_ `/nba Lakers vs Celtics`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+    home_raw, away_raw = raw.split(" vs ", 1)
+    home_in = home_raw.strip()
+    away_in = away_raw.strip()
+
+    home = _bball.resolve_team(home_in) or home_in
+    away = _bball.resolve_team(away_in) or away_in
+
+    await update.message.reply_text("⏳ Analizando partido NBA…")
+    try:
+        pred = _bball.predict_game(home, away)
+        await update.message.reply_text(
+            _format_sport_prediction(pred), parse_mode="Markdown"
+        )
+    except Exception as exc:
+        logger.exception("Error en /nba %s vs %s", home, away)
+        # Try suggestions
+        sugg_h = _bball.suggest_teams(home_in)
+        sugg_a = _bball.suggest_teams(away_in)
+        tip = ""
+        if sugg_h:
+            tip += "\n¿Local? " + ", ".join(sugg_h)
+        if sugg_a:
+            tip += "\n¿Visitante? " + ", ".join(sugg_a)
+        await update.message.reply_text(f"❌ Error: {exc}{tip}")
+
+
+async def mlb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/mlb HOME vs AWAY — MLB game prediction."""
+    if not context.args or " vs " not in " ".join(context.args).lower():
+        await update.message.reply_text(
+            "❌ Formato:\n`/mlb LOCAL vs VISITANTE`\n\n_Ej:_ `/mlb Yankees vs Red Sox`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+    home_raw, away_raw = raw.split(" vs ", 1)
+    home = _baseball.resolve_team(home_raw.strip()) or home_raw.strip()
+    away = _baseball.resolve_team(away_raw.strip()) or away_raw.strip()
+
+    await update.message.reply_text("⏳ Analizando partido MLB…")
+    try:
+        pred = _baseball.predict_game(home, away)
+        await update.message.reply_text(
+            _format_sport_prediction(pred), parse_mode="Markdown"
+        )
+    except Exception as exc:
+        logger.exception("Error en /mlb %s vs %s", home, away)
+        sugg_h = _baseball.suggest_teams(home_raw.strip())
+        sugg_a = _baseball.suggest_teams(away_raw.strip())
+        tip = ""
+        if sugg_h:
+            tip += "\n¿Local? " + ", ".join(sugg_h)
+        if sugg_a:
+            tip += "\n¿Visitante? " + ", ".join(sugg_a)
+        await update.message.reply_text(f"❌ Error: {exc}{tip}")
+
+
+async def nfl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/nfl HOME vs AWAY — NFL game prediction."""
+    if not context.args or " vs " not in " ".join(context.args).lower():
+        await update.message.reply_text(
+            "❌ Formato:\n`/nfl LOCAL vs VISITANTE`\n\n_Ej:_ `/nfl Chiefs vs Eagles`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+    home_raw, away_raw = raw.split(" vs ", 1)
+    home = _nfl.resolve_team(home_raw.strip()) or home_raw.strip()
+    away = _nfl.resolve_team(away_raw.strip()) or away_raw.strip()
+
+    await update.message.reply_text("⏳ Analizando partido NFL…")
+    try:
+        pred = _nfl.predict_game(home, away)
+        await update.message.reply_text(
+            _format_sport_prediction(pred), parse_mode="Markdown"
+        )
+    except Exception as exc:
+        logger.exception("Error en /nfl %s vs %s", home, away)
+        sugg_h = _nfl.suggest_teams(home_raw.strip())
+        sugg_a = _nfl.suggest_teams(away_raw.strip())
+        tip = ""
+        if sugg_h:
+            tip += "\n¿Local? " + ", ".join(sugg_h)
+        if sugg_a:
+            tip += "\n¿Visitante? " + ", ".join(sugg_a)
+        await update.message.reply_text(f"❌ Error: {exc}{tip}")
+
+
+async def tennis(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /tennis P1 vs P2 [clay/grass/hard]
+    Example: /tennis Djokovic vs Alcaraz clay
+    """
+    if not context.args or " vs " not in " ".join(context.args).lower():
+        await update.message.reply_text(
+            "❌ Formato:\n`/tennis JUGADOR1 vs JUGADOR2 [clay/grass/hard]`\n\n"
+            "_Ej:_ `/tennis Djokovic vs Alcaraz clay`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+    # Extract optional surface from the end
+    surface = "hard"
+    for surf in ("clay", "grass", "hard"):
+        if raw.lower().endswith(f" {surf}"):
+            surface = surf
+            raw = raw[: -(len(surf) + 1)].strip()
+            break
+
+    if " vs " not in raw.lower():
+        await update.message.reply_text("❌ Usa el formato: `J1 vs J2 [surface]`", parse_mode="Markdown")
+        return
+
+    p1_raw, p2_raw = raw.split(" vs ", 1)
+    p1 = _tennis.resolve_player(p1_raw.strip()) or p1_raw.strip()
+    p2 = _tennis.resolve_player(p2_raw.strip()) or p2_raw.strip()
+
+    await update.message.reply_text("⏳ Analizando partido de tenis…")
+    try:
+        pred = _tennis.predict_match(p1, p2, surface=surface)
+        await update.message.reply_text(
+            _format_sport_prediction(pred), parse_mode="Markdown"
+        )
+    except Exception as exc:
+        logger.exception("Error en /tennis %s vs %s", p1, p2)
+        sugg_p1 = _tennis.suggest_players(p1_raw.strip())
+        sugg_p2 = _tennis.suggest_players(p2_raw.strip())
+        tip = ""
+        if sugg_p1:
+            tip += "\n¿Jugador 1? " + ", ".join(sugg_p1)
+        if sugg_p2:
+            tip += "\n¿Jugador 2? " + ", ".join(sugg_p2)
+        await update.message.reply_text(f"❌ Error: {exc}{tip}")
+
+
+# ===============================
 # 🚀 MAIN
 # ===============================
 
@@ -450,6 +738,7 @@ def main():
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
+    # ── Football/Soccer commands ──
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("today", today))
@@ -457,7 +746,14 @@ def main():
     app.add_handler(CommandHandler("value", value))
     app.add_handler(CommandHandler("stats", stats))
 
-    logger.info("🤖 Bot corriendo correctamente…")
+    # ── Multi-sport commands ──
+    app.add_handler(CommandHandler("sports", sports_command))
+    app.add_handler(CommandHandler("nba", nba))
+    app.add_handler(CommandHandler("mlb", mlb))
+    app.add_handler(CommandHandler("nfl", nfl))
+    app.add_handler(CommandHandler("tennis", tennis))
+
+    logger.info("🤖 Bot corriendo correctamente — 5 deportes activos…")
     app.run_polling()
 
 

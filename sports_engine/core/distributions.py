@@ -21,7 +21,8 @@ def poisson_sample(lambd: float) -> int:
     if lambd <= 0:
         return 0
     if lambd > 30:
-        # Normal approximation for performance when λ > 30 (error < 0.5%)
+        # Normal approximation for performance when λ > 30 (provides reasonable
+        # accuracy; exact Poisson rarely exceeds λ = 30 in football contexts)
         return max(0, round(random.gauss(lambd, math.sqrt(lambd))))
     L = math.exp(-lambd)
     k = 0
