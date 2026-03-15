@@ -1,3 +1,7 @@
+# ── Runtime dependencies ──────────────────────────────────────────────────────
 python-telegram-bot>=20.0
 python-dotenv
 requests
+
+# ── Development / testing (not installed in production Docker image) ──────────
+# Install with: pip install -r requirements-dev.txt
