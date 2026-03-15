@@ -1,1 +1,1 @@
-worker: python sports_engine/bot/bot.py
+worker: sh -c "PYTHONPATH=sports_engine python sports_engine/bot/bot.py"
