@@ -2,6 +2,8 @@ import os
 import sys
 import csv
 import logging
+import threading
+import time as _time
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -65,9 +67,31 @@ logger = logging.getLogger(__name__)
 
 DATA_PATH = os.path.join(_SPORTS_ENGINE_DIR, "data", "today_matches.csv")
 
-# ===============================
-# 🧠 FUNCIONES AUXILIARES
-# ===============================
+# TTL (seconds) between automatic CSV refreshes for /today
+MATCHES_UPDATE_TTL = 900  # 15 minutes
+
+# State for CSV refresh scheduling
+_matches_lock = threading.Lock()
+_last_csv_update: float = 0.0  # epoch seconds of last successful update
+
+
+def _refresh_matches_if_stale() -> None:
+    """Refresh the football CSV if the TTL has expired. Thread-safe, non-blocking."""
+    global _last_csv_update
+    now = _time.time()
+    if now - _last_csv_update < MATCHES_UPDATE_TTL:
+        return
+    if not _matches_lock.acquire(blocking=False):
+        # Another thread is already refreshing; skip silently
+        return
+    try:
+        update_matches()
+        _last_csv_update = _time.time()
+    except Exception as exc:
+        logger.warning("No se pudieron actualizar los partidos: %s", exc)
+    finally:
+        _matches_lock.release()
+
 
 
 def load_today_matches():
@@ -446,6 +470,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show today's football matches (local CSV) + live ESPN schedule for all sports."""
+    # ── Refresh CSV if stale (TTL = 15 min), non-blocking ──
+    _refresh_matches_if_stale()
+
     # ── Local football matches ──
     football_matches = load_today_matches()
 
@@ -456,6 +483,10 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for m in football_matches:
             league = f" _{m['league']}_" if m["league"] else ""
             text += f"  • {m['home']} vs {m['away']}{league}\n"
+        # Show last update timestamp for the CSV
+        if _last_csv_update:
+            ts = datetime.fromtimestamp(_last_csv_update).strftime("%H:%M")
+            text += f"_Actualizado: {ts}_\n"
         text += "\n"
 
     # ── ESPN multi-sport schedule ──
@@ -2296,6 +2327,22 @@ async def rl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error: {e}")
 
 
+async def matches_update_job(context: ContextTypes.DEFAULT_TYPE):
+    """Scheduled job (every 15 min): refresh today_matches.csv from API-Sports."""
+    global _last_csv_update
+    if not _matches_lock.acquire(blocking=False):
+        logger.debug("matches_update_job: skipped (another refresh in progress)")
+        return
+    try:
+        update_matches()
+        _last_csv_update = _time.time()
+        logger.info("matches_update_job: CSV actualizado")
+    except Exception as exc:
+        logger.warning("matches_update_job: error al actualizar partidos: %s", exc)
+    finally:
+        _matches_lock.release()
+
+
 async def scanner_job(context: ContextTypes.DEFAULT_TYPE):
     """
     Scheduled job (every 15 min): scan all tracked markets and send
@@ -2378,6 +2425,7 @@ async def send_daily_alerts(context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    global _last_csv_update
     logger.info("🚀 Iniciando Sports Engine Bot…")
 
     validate_config()
@@ -2386,9 +2434,10 @@ def main():
         logger.error("TOKEN no está configurado. Saliendo.")
         sys.exit(1)
 
-    # Update today's matches (best-effort)
+    # Update today's matches (best-effort); record timestamp on success
     try:
         update_matches()
+        _last_csv_update = _time.time()
     except Exception as e:
         logger.warning("No se pudieron actualizar los partidos: %s", e)
 
@@ -2452,6 +2501,13 @@ def main():
         # ── Market Error Scanner (every 15 minutes) ──
         app.job_queue.run_repeating(scanner_job, interval=900, first=120)
         logger.info("Market Error Scanner scheduled every 15 min")
+
+        # ── Football CSV refresh (every 15 minutes) ──
+        # first=MATCHES_UPDATE_TTL: the initial update already ran at bot startup,
+        # so schedule the first background refresh one full TTL later to avoid
+        # a redundant API call immediately after boot.
+        app.job_queue.run_repeating(matches_update_job, interval=MATCHES_UPDATE_TTL, first=MATCHES_UPDATE_TTL)
+        logger.info("Football matches CSV refresh scheduled every %d s", MATCHES_UPDATE_TTL)
 
     logger.info("🤖 Bot corriendo — 5 deportes + datos en vivo (SofaScore/TheSportsDB/ESPN)…")
     app.run_polling()

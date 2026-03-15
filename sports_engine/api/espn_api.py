@@ -9,7 +9,9 @@ bot never crashes due to ESPN being unreachable.
 """
 
 import logging
+import re
 import time
+import unicodedata
 from typing import Optional
 
 import requests
@@ -36,6 +38,19 @@ _CACHE: dict = {}
 CACHE_TTL = 1800  # 30 minutes
 
 
+def _normalize(text: str) -> str:
+    """Lowercase, strip accents, and collapse whitespace for fuzzy team-name matching.
+
+    Non-ASCII characters (e.g. accented letters) are decomposed via NFKD and
+    then the accent marks are dropped, so "São Paulo" becomes "sao paulo".
+    This is intentional: ESPN team names and user input are generally ASCII-safe,
+    and normalising both sides prevents missed matches due to encoding differences.
+    """
+    nfkd = unicodedata.normalize("NFKD", text)
+    ascii_str = nfkd.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", ascii_str).strip().lower()
+
+
 def _fetch(url: str, params: dict = None, timeout: int = 8) -> Optional[dict]:
     """
     Fetch JSON from an ESPN URL with in-memory caching and error handling.
@@ -51,7 +66,9 @@ def _fetch(url: str, params: dict = None, timeout: int = 8) -> Optional[dict]:
 
     try:
         resp = requests.get(url, params=params, timeout=timeout)
-        resp.raise_for_status()
+        if not resp.ok:
+            logger.warning("ESPN API HTTP %s: %s", resp.status_code, url)
+            return None
         data = resp.json()
         _CACHE[cache_key] = (data, now)
         logger.debug("ESPN API OK: %s", url)
@@ -158,9 +175,14 @@ def find_team_id(sport: str, team_name: str) -> Optional[str]:
     if not data:
         return None
 
-    query = team_name.lower().strip()
+    query = _normalize(team_name)
     for tid, display, abbr, location, name in _iter_teams(data):
-        candidates = [display.lower(), abbr.lower(), location.lower(), name.lower()]
+        candidates = [
+            _normalize(display),
+            _normalize(abbr),
+            _normalize(location),
+            _normalize(name),
+        ]
         if any(query == c or query in c or c in query for c in candidates if c):
             return tid
     return None
