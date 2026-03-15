@@ -408,6 +408,44 @@ def predict_match(
     cs_home = clean_sheet_prob(h_home_data["defense"]) if h_home_data else None
     cs_away = clean_sheet_prob(a_away_data["defense"]) if a_away_data else None
 
+    # ── Win to Nil detection ──
+    btts_val = final_probs.get("btts", 0)
+    cs_home_val = cs_home if cs_home is not None else 0.0
+    cs_away_val = cs_away if cs_away is not None else 0.0
+
+    if (
+        xg_away < 1.0
+        and cs_home_val > 0.35
+        and btts_val < 55
+        and (xg_home - xg_away) > 1.2
+    ):
+        win_to_nil = {
+            "detected": True,
+            "team": home_resolved,
+            "side": "home",
+            "high_value": xg_home > 2.0,
+            "confidence": "ALTA" if cs_home_val > 0.50 else "MEDIA",
+            "xg_diff": round(xg_home - xg_away, 2),
+            "cs_prob": cs_home_val,
+        }
+    elif (
+        xg_home < 1.0
+        and cs_away_val > 0.35
+        and btts_val < 55
+        and (xg_away - xg_home) > 1.2
+    ):
+        win_to_nil = {
+            "detected": True,
+            "team": away_resolved,
+            "side": "away",
+            "high_value": xg_away > 2.0,
+            "confidence": "ALTA" if cs_away_val > 0.50 else "MEDIA",
+            "xg_diff": round(xg_away - xg_home, 2),
+            "cs_prob": cs_away_val,
+        }
+    else:
+        win_to_nil = {"detected": False}
+
     return {
         "home": home_resolved,
         "away": away_resolved,
@@ -448,6 +486,7 @@ def predict_match(
         "live_source": live_source,
         "live_home_form": live_home_form,
         "live_away_form": live_away_form,
+        "win_to_nil": win_to_nil,
     }
 
 

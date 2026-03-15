@@ -128,102 +128,151 @@ def format_prediction(pred: dict) -> str:
     conf = pred["confidence"]
     emoji = _confidence_emoji(conf)
     league = pred.get("league", "")
-    league_str = f" _({league})_" if league and league != "default" else ""
+    league_str = f"\n🏆 Liga: {league}" if league and league != "default" else ""
 
-    # Top scoreline
-    top_score = pred["top_scores"][0] if pred.get("top_scores") else ("?", 0)
-    score_str = f"{top_score[0]} ({top_score[1]:.1f}%)"
+    home = pred["home"]
+    away = pred["away"]
 
-    # Form section
+    # ── 1. xG ──
+    xg_section = (
+        f"📊 *1. xG Esperado*\n"
+        f"  Local: `{pred['xg_home']}` | Visitante: `{pred['xg_away']}`"
+    )
+
+    # ── 2. 1X2 probabilities ──
+    x12_section = (
+        f"🎯 *2. Probabilidades 1X2*\n"
+        f"  🏠 Local: `{pred['home_win']:.1f}%` | "
+        f"🤝 Empate: `{pred['draw']:.1f}%` | "
+        f"✈️ Visitante: `{pred['away_win']:.1f}%`"
+    )
+
+    # ── 3. Top 3 scorelines ──
+    top_scores = pred.get("top_scores", [])
+    score_lines = []
+    for i, entry in enumerate(top_scores[:3], 1):
+        score_lines.append(f"  {i}. `{entry[0]}` ({entry[1]:.1f}%)")
+    scores_lines_str = "\n".join(score_lines)
+    scores_section = f"📋 *3. Marcador más probable*\n{scores_lines_str}" if score_lines else ""
+
+    # ── 4. Goal markets ──
+    goals_section = (
+        f"⚽ *4. Mercados de goles*\n"
+        f"  Over 1.5: `{pred['over_1_5']}%` | Over 2.5: `{pred['over_2_5']}%` | Over 3.5: `{pred['over_3_5']}%`\n"
+        f"  BTTS: `{pred['btts']}%`"
+    )
+
+    # ── 5. Shots on target ──
+    sot = pred.get("shots_on_target")
+    if sot:
+        sot_section = (
+            f"🎯 *5. Tiros a puerta esperados*\n"
+            f"  Local: `{sot['sot_home']}` | Visitante: `{sot['sot_away']}`"
+        )
+    else:
+        sot_section = f"🎯 *5. Tiros a puerta esperados*\n  Local: — | Visitante: —"
+
+    # ── 6. Corners ──
+    corner_mkt = pred.get("corners_market", {})
+    if corner_mkt:
+        corners_section = (
+            f"🚩 *6. Córners esperados:* `{corner_mkt['expected']}`  "
+            f"_(Línea {corner_mkt['line']}: {corner_mkt['suggestion']})_"
+        )
+    else:
+        corners_section = f"🚩 *6. Córners esperados:* `{pred.get('corners', '—')}`"
+
+    # ── 7. Cards ──
+    cd = pred.get("cards_detail")
+    if cd:
+        home1 = home.split()[0]
+        away1 = away.split()[0]
+        over_label = "Over 3.5 ✅" if cd["over_3_5_cards"] else "Under 3.5"
+        cards_section = (
+            f"🟨 *7. Tarjetas esperadas:*\n"
+            f"  {home1}: `{cd['yellow_home']}A` | {away1}: `{cd['yellow_away']}A` | "
+            f"Rojas: `{cd['total_red']:.2f}` → {over_label}"
+        )
+    else:
+        cards_section = f"🟨 *7. Tarjetas esperadas:* `{pred.get('cards', '—')}`"
+
+    # ── 8. Form & H2H ──
     fh = pred.get("form_home", {})
     fa = pred.get("form_away", {})
-    form_home_str = f"{fh.get('emoji','➡️')} {fh.get('last5','-----')}"
-    form_away_str = f"{fa.get('emoji','➡️')} {fa.get('last5','-----')}"
+    form_home_str = f"{fh.get('emoji', '➡️')} {fh.get('last5', '-----')}"
+    form_away_str = f"{fa.get('emoji', '➡️')} {fa.get('last5', '-----')}"
 
-    # H2H section
-    h2h_section = _h2h_line(pred)
+    h2h = pred.get("h2h", {})
+    h2h_total = h2h.get("total", 0)
+    if h2h_total >= 3:
+        hw = h2h.get("home_wins", 0)
+        draws = h2h.get("draws", 0)
+        aw = h2h.get("away_wins", 0)
+        h2h_line = f"\n  H2H: {h2h_total} partidos — Local {hw} | Empates {draws} | Visitante {aw}"
+    else:
+        h2h_line = ""
 
-    # Value bets (only shown if user supplied odds)
+    form_section = (
+        f"📈 *8. Forma reciente*\n"
+        f"  {home}: {form_home_str}\n"
+        f"  {away}: {form_away_str}"
+        f"{h2h_line}"
+    )
+
+    # ── 9. Pick del partido ──
+    best_pick = _best_pick(pred)
+    pick_section = (
+        f"🎯 *9. PICK DEL PARTIDO*\n"
+        f"  {best_pick}\n"
+        f"  Confianza: {conf} {emoji}"
+    )
+
+    # ── Win to Nil extra pick ──
+    wtn = pred.get("win_to_nil", {})
+    wtn_section = ""
+    if wtn.get("detected"):
+        side_label = "local" if wtn["side"] == "home" else "visitante"
+        wtn_section = f"\n💡 *Pick adicional:* Victoria del {side_label} a cero"
+        if wtn.get("high_value"):
+            wtn_section += "\n  ⭐ *VALOR ALTO* — Alta probabilidad de marcador 2-0 o 3-0"
+
+    # ── Value bets (only when odds supplied) ──
     value_lines = []
     for market, val in (pred.get("value_bets") or {}).items():
         if val and val > 0:
             value_lines.append(f"  ✅ {market.capitalize()}: +{val:.3f}")
     value_section = "\n💰 *Value Bets*\n" + "\n".join(value_lines) if value_lines else ""
 
-    # Clean sheet probabilities
-    cs_home = pred.get("clean_sheet_home")
-    cs_away = pred.get("clean_sheet_away")
-    cs_str = ""
-    if cs_home is not None and cs_away is not None:
-        cs_str = (
-            f"\n🔒 *Clean Sheet*\n"
-            f"  {pred['home'].split()[0]}: {cs_home*100:.0f}% | "
-            f"{pred['away'].split()[0]}: {cs_away*100:.0f}%\n"
-        )
+    sections = [
+        f"🤖 *SPORTS ENGINE — Análisis Completo*",
+        f"",
+        f"⚽ *{home} vs {away}*{league_str}",
+        f"",
+        xg_section,
+        f"",
+        x12_section,
+        f"",
+        scores_section,
+        f"",
+        goals_section,
+        f"",
+        sot_section,
+        f"",
+        corners_section,
+        f"",
+        cards_section,
+        f"",
+        form_section,
+        f"",
+        pick_section,
+        wtn_section,
+        value_section,
+    ]
 
-    # Shots on target (new)
-    sot = pred.get("shots_on_target")
-    sot_str = ""
-    if sot:
-        home1 = pred["home"].split()[0]
-        away1 = pred["away"].split()[0]
-        sot_str = (
-            f"👁 *Tiros a puerta*\n"
-            f"  {home1}: `{sot['sot_home']}`  {away1}: `{sot['sot_away']}`  "
-            f"Total: `{sot['sot_total']}` ({sot['suggestion']} {sot['line']})\n\n"
-        )
-
-    # Card detail (new)
-    cd = pred.get("cards_detail")
-    corner_mkt = pred.get("corners_market", {})
-    card_line = ""
-    if cd:
-        home1 = pred["home"].split()[0]
-        away1 = pred["away"].split()[0]
-        over_label = "✅ Over 3.5" if cd["over_3_5_cards"] else "Under 3.5"
-        card_line = (
-            f"🟨 *Tarjetas* — {home1}: `{cd['yellow_home']}A` {away1}: `{cd['yellow_away']}A` "
-            f"🟥 Total rojas: `{cd['total_red']:.2f}` → {over_label}\n"
-        )
-    else:
-        card_line = f"🚩 Córners: `{pred['corners']}`  🟨 Tarjetas: `{pred['cards']}`\n"
-
-    corners_str = ""
-    if corner_mkt:
-        corners_str = (
-            f"🚩 *Córners* — Total esperado: `{corner_mkt['expected']}`  "
-            f"Línea {corner_mkt['line']}: `{corner_mkt['suggestion']}`\n"
-        )
-    else:
-        corners_str = f"🚩 Córners: `{pred['corners']}`\n"
-
-    return (
-        f"⚽ *{pred['home']} vs {pred['away']}*{league_str}\n\n"
-        f"📊 *xG Esperado*\n"
-        f"  Local: `{pred['xg_home']}`  Visitante: `{pred['xg_away']}`\n\n"
-        f"🏆 *Probabilidades 1X2*\n"
-        f"  Local: `{pred['home_win']:.1f}%`\n"
-        f"  Empate: `{pred['draw']:.1f}%`\n"
-        f"  Visitante: `{pred['away_win']:.1f}%`\n\n"
-        f"🎯 *Marcador más probable:* `{score_str}`\n\n"
-        f"🔥 *Mercados*\n"
-        f"  Over 1.5: `{pred['over_1_5']}%`\n"
-        f"  Over 2.5: `{pred['over_2_5']}%`\n"
-        f"  Over 3.5: `{pred['over_3_5']}%`\n"
-        f"  BTTS: `{pred['btts']}%`\n\n"
-        f"{sot_str}"
-        f"📈 *Forma reciente*\n"
-        f"  {pred['home'].split()[0]}: {form_home_str}\n"
-        f"  {pred['away'].split()[0]}: {form_away_str}\n"
-        f"{h2h_section}"
-        f"{cs_str}"
-        f"{corners_str}"
-        f"{card_line}"
-        f"{value_section}\n\n"
-        f"💡 *Mejor Pick:* {_best_pick(pred)}\n"
-        f"{emoji} *Confianza:* {conf}"
-        + _live_source_badge(pred)
-    )
+    # Filter out None/empty strings from sections
+    output = "\n".join(s for s in sections if s is not None)
+    output += _live_source_badge(pred)
+    return output
 
 
 def _live_source_badge(pred: dict) -> str:
