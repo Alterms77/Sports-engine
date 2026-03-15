@@ -458,7 +458,34 @@ def predict_match(
             "high_value": xg_away > 2.0,
         }
 
-    return {
+    # ── Advanced metrics ──
+    try:
+        from core.advanced_metrics import compute_advanced_metrics
+        advanced = compute_advanced_metrics(
+            xg_home, xg_away,
+            TEAM_STATS.get(home_resolved, {}),
+            TEAM_STATS.get(away_resolved, {}),
+            max(LEAGUE_AVG, 0.01),
+            HOME_STATS.get(home_resolved),
+            AWAY_STATS.get(away_resolved),
+        )
+    except Exception:
+        advanced = {
+            "xt_home": 0.0, "xt_away": 0.0,
+            "ppda_home": 10.0, "ppda_away": 10.0,
+            "tilt_home": 50.0, "tilt_away": 50.0,
+        }
+
+    # ── Sharp game detection ──
+    try:
+        from core.elo import get_team_elo
+        home_elo = get_team_elo(home_resolved)
+        away_elo = get_team_elo(away_resolved)
+    except Exception:
+        home_elo = elo_home
+        away_elo = elo_away
+
+    result = {
         "home": home_resolved,
         "away": away_resolved,
         "league": league,
@@ -504,7 +531,32 @@ def predict_match(
         "live_source": live_source,
         "live_home_form": live_home_form,
         "live_away_form": live_away_form,
+        # ── Advanced metrics ──
+        "xt_home": advanced["xt_home"],
+        "xt_away": advanced["xt_away"],
+        "ppda_home": advanced["ppda_home"],
+        "ppda_away": advanced["ppda_away"],
+        "tilt_home": advanced["tilt_home"],
+        "tilt_away": advanced["tilt_away"],
+        "home_elo": home_elo,
+        "away_elo": away_elo,
     }
+
+    # ── Advanced predictions (DNB, Double Chance, AH, HT/FT, team totals) ──
+    try:
+        from core.advanced_predictions import compute_all_advanced
+        result["advanced_predictions"] = compute_all_advanced(xg_home, xg_away, result)
+    except Exception:
+        result["advanced_predictions"] = {}
+
+    # ── Sharp game detection (needs full result dict) ──
+    try:
+        from core.sharp import detect_sharp_game
+        result["sharp"] = detect_sharp_game(result, home_elo, away_elo)
+    except Exception:
+        result["sharp"] = {"is_sharp": False, "reasons": [], "edge_score": 0.0, "pick": "", "pick_prob": 0.0}
+
+    return result
 
 
 # ===============================
