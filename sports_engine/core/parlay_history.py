@@ -104,34 +104,64 @@ CREATE TABLE IF NOT EXISTS parlays (
 );
 
 CREATE TABLE IF NOT EXISTS parlay_legs (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
-    parlay_id      TEXT    NOT NULL REFERENCES parlays(id) ON DELETE CASCADE,
-    leg_order      INTEGER NOT NULL,
-    match_name     TEXT    NOT NULL DEFAULT '',
-    pick           TEXT    NOT NULL DEFAULT '',
-    market_type    TEXT    NOT NULL DEFAULT '',
-    sport          TEXT    NOT NULL DEFAULT '',
-    league         TEXT    NOT NULL DEFAULT '',
-    sport_emoji    TEXT    NOT NULL DEFAULT '',
-    predicted_prob REAL,
-    result         TEXT
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    parlay_id        TEXT    NOT NULL REFERENCES parlays(id) ON DELETE CASCADE,
+    leg_order        INTEGER NOT NULL,
+    match_name       TEXT    NOT NULL DEFAULT '',
+    pick             TEXT    NOT NULL DEFAULT '',
+    market_type      TEXT    NOT NULL DEFAULT '',
+    sport            TEXT    NOT NULL DEFAULT '',
+    league           TEXT    NOT NULL DEFAULT '',
+    sport_emoji      TEXT    NOT NULL DEFAULT '',
+    predicted_prob   REAL,
+    result           TEXT,
+    -- extended analytics columns (added in v2 — nullable for back-compat)
+    prob_raw         REAL,
+    prob_calibrated  REAL,
+    risk_score       REAL,
+    risk_reasons     TEXT,   -- JSON array string
+    n_samples_used   INTEGER,
+    live_data_used   INTEGER,  -- 0/1 boolean
+    sharp_flag       INTEGER   -- 0/1 boolean
 );
 
-CREATE INDEX IF NOT EXISTS idx_legs_parlay ON parlay_legs(parlay_id);
-CREATE INDEX IF NOT EXISTS idx_legs_result ON parlay_legs(result);
-CREATE INDEX IF NOT EXISTS idx_legs_market ON parlay_legs(market_type);
-CREATE INDEX IF NOT EXISTS idx_legs_sport  ON parlay_legs(sport);
-CREATE INDEX IF NOT EXISTS idx_legs_league ON parlay_legs(league);
+CREATE INDEX IF NOT EXISTS idx_legs_parlay  ON parlay_legs(parlay_id);
+CREATE INDEX IF NOT EXISTS idx_legs_result  ON parlay_legs(result);
+CREATE INDEX IF NOT EXISTS idx_legs_market  ON parlay_legs(market_type);
+CREATE INDEX IF NOT EXISTS idx_legs_sport   ON parlay_legs(sport);
+CREATE INDEX IF NOT EXISTS idx_legs_league  ON parlay_legs(league);
+CREATE INDEX IF NOT EXISTS idx_legs_prob_c  ON parlay_legs(prob_calibrated);
 """
+
+# ── Schema migration (add v2 columns to existing DBs) ──────────────────────────
+_V2_COLUMNS = [
+    ("prob_raw",        "REAL"),
+    ("prob_calibrated", "REAL"),
+    ("risk_score",      "REAL"),
+    ("risk_reasons",    "TEXT"),
+    ("n_samples_used",  "INTEGER"),
+    ("live_data_used",  "INTEGER"),
+    ("sharp_flag",      "INTEGER"),
+]
 
 
 # ── Database helpers ───────────────────────────────────────────────────────────
 
 def _ensure_db() -> None:
-    """Create the database and tables if they do not yet exist."""
+    """Create the database and tables if they do not yet exist, and run schema migrations."""
     os.makedirs(_DATA_DIR, exist_ok=True)
     with sqlite3.connect(_DB_FILE) as conn:
         conn.executescript(_DDL)
+        # Add v2 columns to existing databases that pre-date the extended schema
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(parlay_legs)")}
+        for col_name, col_type in _V2_COLUMNS:
+            if col_name not in existing:
+                try:
+                    conn.execute(
+                        f"ALTER TABLE parlay_legs ADD COLUMN {col_name} {col_type}"
+                    )
+                except Exception as exc:
+                    logger.warning("parlay_history: could not add column %s: %s", col_name, exc)
 
 
 @contextmanager
@@ -257,6 +287,8 @@ def save_parlay(legs: list, tier: str, combined_prob: Optional[float]) -> str:
     legs         : list of leg dicts from ``generate_parlay_legs``.
                    Expected keys: match, pick, market_type, sport_emoji,
                    prob (or predicted_prob), league, sport (all optional).
+                   Extended keys (v2): raw_prob, risk_score, risk_reasons,
+                   n_samples_used, live_data, sharp_flag.
     tier         : "safe" | "balanced" | "risky"
     combined_prob: combined probability (%) for this tier's legs
 
@@ -275,12 +307,17 @@ def save_parlay(legs: list, tier: str, combined_prob: Optional[float]) -> str:
                 (pid, now, tier, combined_prob, None),
             )
             for order, leg in enumerate(legs):
-                prob = leg.get("prob") if leg.get("prob") is not None else leg.get("predicted_prob")
+                prob     = leg.get("prob") if leg.get("prob") is not None else leg.get("predicted_prob")
+                raw_prob = leg.get("raw_prob")
+                reasons  = leg.get("risk_reasons", [])
+                reasons_json = json.dumps(reasons) if isinstance(reasons, list) else reasons
                 conn.execute(
                     "INSERT INTO parlay_legs"
                     "(parlay_id, leg_order, match_name, pick, market_type, "
-                    " sport, league, sport_emoji, predicted_prob, result) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    " sport, league, sport_emoji, predicted_prob, result,"
+                    " prob_raw, prob_calibrated, risk_score, risk_reasons,"
+                    " n_samples_used, live_data_used, sharp_flag) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         pid, order,
                         leg.get("match", ""),
@@ -291,6 +328,13 @@ def save_parlay(legs: list, tier: str, combined_prob: Optional[float]) -> str:
                         leg.get("sport_emoji", ""),
                         prob,
                         None,
+                        raw_prob,
+                        prob,   # prob_calibrated = prob (already calibrated)
+                        leg.get("risk_score"),
+                        reasons_json,
+                        leg.get("n_samples_used"),
+                        1 if leg.get("live_data", True) else 0,
+                        1 if leg.get("sharp_flag", False) else 0,
                     ),
                 )
         logger.info("parlay_history: saved %s (%d legs, tier=%s)", pid, len(legs), tier)
@@ -374,10 +418,11 @@ def record_results(parlay_id: str, results: list) -> dict:
                 for r in leg_rows
             ]
             return {
-                "found":   True,
-                "id":      real_pid,
-                "legs":    legs,
-                "overall": overall,
+                "found":    True,
+                "id":       real_pid,
+                "legs":     legs,
+                "overall":  overall,
+                "num_legs": len(leg_rows),
             }
 
 
@@ -607,6 +652,68 @@ def _get_factor(group_stats: Optional[dict]) -> Optional[float]:
 
 # ── Deep analytics ─────────────────────────────────────────────────────────────
 
+def get_num_legs_for_parlay(parlay_id: str) -> int:
+    """Return the number of legs in a parlay, or 0 if not found."""
+    _migrate_json_if_needed()
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM parlay_legs WHERE parlay_id = ?", (parlay_id,)
+        ).fetchone()
+    return row[0] if row else 0
+
+
+def get_bucket_stats(min_n: int = 3) -> dict:
+    """
+    Return hit-rate statistics bucketed by calibrated probability range.
+
+    Buckets: [0.50-0.55), [0.55-0.60), [0.60-0.65), [0.65-0.70),
+             [0.70-0.75), [0.75-0.80), [0.80-0.90), [0.90+)
+
+    Parameters
+    ----------
+    min_n : minimum resolved legs in a bucket for it to be included.
+
+    Returns
+    -------
+    dict mapping bucket_label → {n, hit_rate, brier_score}
+    """
+    _migrate_json_if_needed()
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT prob_calibrated, result "
+            "FROM parlay_legs "
+            "WHERE result IN ('W','L') AND prob_calibrated IS NOT NULL"
+        ).fetchall()
+
+    # Define bucket edges (lower inclusive, upper exclusive) in %
+    edges = [50, 55, 60, 65, 70, 75, 80, 90, 101]
+    buckets: dict = {}
+    for i in range(len(edges) - 1):
+        lo, hi  = edges[i], edges[i + 1]
+        label   = f"{lo}-{hi-1}%" if hi <= 100 else f"{lo}%+"
+        buckets[label] = {"lo": lo, "hi": hi, "data": []}
+
+    for row in rows:
+        p   = float(row["prob_calibrated"])
+        out = 1 if row["result"] == "W" else 0
+        for label, bkt in buckets.items():
+            if bkt["lo"] <= p < bkt["hi"]:
+                bkt["data"].append((p, out))
+                break
+
+    result: dict = {}
+    for label, bkt in buckets.items():
+        data = bkt["data"]
+        if len(data) < min_n:
+            continue
+        n          = len(data)
+        hit_rate   = round(sum(o for _, o in data) / n * 100, 1)
+        brier      = round(sum((p / 100 - o) ** 2 for p, o in data) / n, 4)
+        result[label] = {"n": n, "hit_rate": hit_rate, "brier_score": brier}
+
+    return result
+
+
 def get_trend(n_last: int = 20) -> list:
     """
     Return the win/loss trend for the last ``n_last`` *resolved* parlays.
@@ -738,8 +845,13 @@ def format_history_summary(records: list, cal_stats: dict) -> str:
     return "\n".join(lines)
 
 
-def format_estadisticas(cal_stats: dict, sport_stats: dict,
-                        league_stats: dict, trend: list) -> str:
+def format_estadisticas(
+    cal_stats: dict,
+    sport_stats: dict,
+    league_stats: dict,
+    trend: list,
+    bucket_stats: Optional[dict] = None,
+) -> str:
     """Format the /estadisticas deep-analytics message for Telegram."""
     lines = [
         "╔══════════════════════════════════╗",
@@ -823,6 +935,19 @@ def format_estadisticas(cal_stats: dict, sport_stats: dict,
             lines.append(
                 f"  _{mtype}_: predicha `{s['predicted']}%` → real `{s['hit_rate']}%` "
                 f"(n={s['n']}) {be}"
+            )
+        lines.append("")
+
+    # ── Probability bucket breakdown (hit rate per prob range) ───────────
+    if bucket_stats:
+        lines += [
+            "🪣 *HIT RATE POR BUCKET DE PROB*",
+            "━━━━━━━━━━━━━━━━━━━━",
+        ]
+        for label, bs in sorted(bucket_stats.items()):
+            brier_str = f"  Brier={bs['brier_score']:.3f}" if "brier_score" in bs else ""
+            lines.append(
+                f"  _{label}_: `{bs['hit_rate']}%` acierto (n={bs['n']}){brier_str}"
             )
         lines.append("")
 

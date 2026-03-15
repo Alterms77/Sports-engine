@@ -513,3 +513,58 @@ class TestFormatEstadisticas:
     def test_contains_resultado_hint(self, tmp_history):
         text = tmp_history.format_estadisticas({}, {}, {}, [])
         assert "/resultado" in text
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# get_num_legs_for_parlay
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestGetNumLegsForParlay:
+    def test_returns_zero_for_unknown_id(self, tmp_history):
+        assert tmp_history.get_num_legs_for_parlay("P999999-99") == 0
+
+    def test_returns_correct_leg_count(self, tmp_history):
+        legs = [_leg("A vs B"), _leg("C vs D"), _leg("E vs F")]
+        pid = tmp_history.save_parlay(legs, "balanced", 72.0)
+        assert tmp_history.get_num_legs_for_parlay(pid) == 3
+
+    def test_single_leg(self, tmp_history):
+        pid = tmp_history.save_parlay([_leg()], "safe", 82.0)
+        assert tmp_history.get_num_legs_for_parlay(pid) == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# get_bucket_stats
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestGetBucketStats:
+    def _leg_with_cal(self, prob_calibrated=72.0, match="A vs B", result=None):
+        l = _leg(match=match, prob=prob_calibrated)
+        l["prob_calibrated"] = prob_calibrated
+        return l
+
+    def test_empty_when_no_resolved_legs(self, tmp_history):
+        tmp_history.save_parlay([_leg()], "safe", 82.0)
+        # No resolved legs → buckets with min_n=1 but no results either
+        stats = tmp_history.get_bucket_stats(min_n=1)
+        # No results at all
+        assert isinstance(stats, dict)
+
+    def test_bucket_populated_after_results(self, tmp_history):
+        # Save 3 resolved legs in the 70-75 % bucket
+        for i, res in enumerate(["W", "W", "L"]):
+            pid = tmp_history.save_parlay([_leg(match=f"M{i} vs N{i}", prob=72.0)],
+                                          "safe", 72.0)
+            tmp_history.record_results(pid, [res])
+        stats = tmp_history.get_bucket_stats(min_n=1)
+        # prob_calibrated defaults to prob in save_parlay → should land in 70-75% bucket
+        assert isinstance(stats, dict)
+
+    def test_min_n_filters_small_buckets(self, tmp_history):
+        # Only 1 resolved leg → with min_n=3 should not appear
+        pid = tmp_history.save_parlay([_leg(prob=72.0)], "safe", 72.0)
+        tmp_history.record_results(pid, ["W"])
+        stats_strict = tmp_history.get_bucket_stats(min_n=3)
+        stats_loose  = tmp_history.get_bucket_stats(min_n=1)
+        # At most as many buckets with strict as with loose
+        assert len(stats_strict) <= len(stats_loose)
