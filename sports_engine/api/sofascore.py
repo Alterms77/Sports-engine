@@ -48,10 +48,12 @@ SPORT_SLUGS = {
 }
 
 # ── Headers that mimic a real browser request ─────────────────────────────────
+# The User-Agent should reflect a reasonably recent browser version to avoid
+# being blocked. Update the Chrome version number periodically if needed.
 _HEADERS = {
     "User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/122.0.0.0 Safari/537.36",
+                       "Chrome/124.0.0.0 Safari/537.36",
     "Accept":          "application/json",
     "Accept-Language": "en-US,en;q=0.9",
     "Referer":         "https://www.sofascore.com/",

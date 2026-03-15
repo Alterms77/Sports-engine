@@ -122,7 +122,9 @@ def suggest_teams(name: str, top_n: int = 3) -> list:
 # DIXON-COLES RHO CORRECTION
 # ===============================
 
-_RHO = -0.13  # standard estimate from Dixon & Coles (1997)
+_RHO = -0.13  # standard empirical estimate from Dixon & Coles (1997), Table 2.
+              # This value can be re-estimated from historical data per league for
+              # improved accuracy (e.g. low-scoring leagues may need a larger |ρ|).
 
 
 def _dc_correction(
