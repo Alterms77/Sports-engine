@@ -17,6 +17,21 @@ TELEGRAM_TOKEN: str = os.getenv("TOKEN", "")
 API_SPORTS_KEY: str = os.getenv("API_SPORTS_KEY", "")
 ALERTS_CHANNEL_ID: str = os.getenv("ALERTS_CHANNEL_ID", "")
 
+# ── The Odds API (https://the-odds-api.com) ───────────────────────────────────
+# Optional: if set, the auto-scanner fetches live bookmaker odds automatically.
+# Without this key the scanner still runs, using ESPN events + model-based odds.
+ODDS_API_KEY: str = os.getenv("ODDS_API_KEY", "")
+ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
+
+# ── Auto-scanner tuning ────────────────────────────────────────────────────────
+# Interval (seconds) between full auto-scan cycles. Default 300 s (5 min).
+# With the free Odds-API tier (500 req/month) a longer interval is recommended.
+AUTO_SCAN_INTERVAL: int = int(os.getenv("AUTO_SCAN_INTERVAL", "300"))
+# Minimum EV% before an alert is sent (avoids marginal-value spam).
+AUTO_SCAN_MIN_EV: float = float(os.getenv("AUTO_SCAN_MIN_EV", "5.0"))
+# How long (seconds) to suppress a repeated identical alert (deduplication TTL).
+AUTO_SCAN_DEDUP_TTL: int = int(os.getenv("AUTO_SCAN_DEDUP_TTL", "3600"))
+
 # ===============================
 # 🌐 API ENDPOINTS
 # ===============================

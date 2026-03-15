@@ -67,7 +67,7 @@ def _fetch(url: str, params: dict = None, timeout: int = 8) -> Optional[dict]:
     try:
         resp = requests.get(url, params=params, timeout=timeout)
         if not resp.ok:
-            logger.warning("ESPN API HTTP %s: %s", resp.status_code, url)
+            logger.warning("ESPN API HTTP %s %s: %s", resp.status_code, resp.reason, url)
             return None
         data = resp.json()
         _CACHE[cache_key] = (data, now)
