@@ -124,121 +124,189 @@ def _h2h_line(pred: dict) -> str:
     )
 
 
+def _bar(pct: float, width: int = 10) -> str:
+    """Visual progress bar using block characters."""
+    filled = round(pct / 100 * width)
+    filled = max(0, min(filled, width))
+    return "█" * filled + "░" * (width - filled)
+
+
 def format_prediction(pred: dict) -> str:
     conf = pred["confidence"]
-    emoji = _confidence_emoji(conf)
+    conf_emoji = _confidence_emoji(conf)
     league = pred.get("league", "")
-    league_str = f" _({league})_" if league and league != "default" else ""
+    home = pred.get("home", "Local")
+    away = pred.get("away", "Visitante")
+    home1 = home.split()[0]
+    away1 = away.split()[0]
+
+    elo_home = pred.get("home_elo") or pred.get("elo_home", 1500)
+    elo_away = pred.get("away_elo") or pred.get("elo_away", 1500)
+    league_line = f" {league}" if league and league != "default" else ""
+
+    # ── Header box ──
+    title = f"⚽  {home}  vs  {away}"
+    lines = [
+        "╔══════════════════════════════════╗",
+        f"  {title}",
+        f"  🏆{league_line}   Elo: {elo_home:.0f} — {elo_away:.0f}",
+        "╚══════════════════════════════════╝",
+        "",
+    ]
+
+    # ── Model section: xG, xT, PPDA, Field Tilt ──
+    xg_h = pred.get("xg_home", 0)
+    xg_a = pred.get("xg_away", 0)
+    xt_h = pred.get("xt_home", 0)
+    xt_a = pred.get("xt_away", 0)
+    ppda_h = pred.get("ppda_home", 10)
+    ppda_a = pred.get("ppda_away", 10)
+    tilt_h = pred.get("tilt_home", 50)
+    tilt_a = pred.get("tilt_away", 50)
+
+    lines += [
+        "📐 *MODELO*",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"  xG         `{xg_h:.2f}` ─── `{xg_a:.2f}`",
+        f"  xThreat    `{xt_h:.2f}` ─── `{xt_a:.2f}`",
+        f"  PPDA       `{ppda_h:.1f}` ─── `{ppda_a:.1f}`",
+        f"  Field Tilt `{tilt_h:.1f}%` ─── `{tilt_a:.1f}%`",
+        "",
+    ]
+
+    # ── Probabilities with visual bars ──
+    hw = pred.get("home_win", 0)
+    dr = pred.get("draw", 0)
+    aw = pred.get("away_win", 0)
+    lines += [
+        "🏆 *PROBABILIDADES 1X2*",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"  {home1:<12} `{hw:5.1f}%` {_bar(hw)}",
+        f"  Empate      `{dr:5.1f}%` {_bar(dr)}",
+        f"  {away1:<12} `{aw:5.1f}%` {_bar(aw)}",
+        "",
+    ]
 
     # Top scoreline
-    top_score = pred["top_scores"][0] if pred.get("top_scores") else ("?", 0)
-    score_str = f"{top_score[0]} ({top_score[1]:.1f}%)"
+    top_score = pred["top_scores"][0] if pred.get("top_scores") else ("?-?", 0)
+    lines.append(f"🎯 *Marcador probable:* `{top_score[0]}` ({top_score[1]:.1f}%)")
+    lines.append("")
 
-    # Form section
+    # ── Markets with bars ──
+    o15 = pred.get("over_1_5", 0)
+    o25 = pred.get("over_2_5", 0)
+    o35 = pred.get("over_3_5", 0)
+    btts = pred.get("btts", 0)
+    lines += [
+        "📊 *MERCADOS*",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"  Over 1.5  `{o15:5.1f}%` {_bar(o15)}",
+        f"  Over 2.5  `{o25:5.1f}%` {_bar(o25)}",
+        f"  Over 3.5  `{o35:5.1f}%` {_bar(o35)}",
+        f"  BTTS      `{btts:5.1f}%` {_bar(btts)}",
+        "",
+    ]
+
+    # ── Props: corners, cards, clean sheet, SOT ──
+    corner_mkt = pred.get("corners_market", {})
+    cd = pred.get("cards_detail")
+    cs_home = pred.get("clean_sheet_home")
+    cs_away = pred.get("clean_sheet_away")
+    sot = pred.get("shots_on_target")
+
+    lines.append("🔧 *PROPS*")
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+
+    if corner_mkt and corner_mkt.get("total") is not None:
+        lines.append(
+            f"  🚩 Córners  {home1}: `{corner_mkt['home']}` | {away1}: `{corner_mkt['away']}` | "
+            f"Total: `{corner_mkt['total']}` → `{corner_mkt['suggestion']} {corner_mkt['line']}`"
+        )
+    else:
+        lines.append(f"  🚩 Córners total: `{pred.get('corners_total', pred.get('corners', '?'))}`")
+
+    if cd:
+        over_label = "Over 3.5" if cd["over_3_5_cards"] else "Under 3.5"
+        lines.append(
+            f"  🟨 Tarjetas  {home1}: `{cd['yellow_home']}A` {away1}: `{cd['yellow_away']}A`"
+            f"  🟥 Rojas: `{cd['total_red']:.1f}` → `{over_label}`"
+        )
+    else:
+        lines.append(f"  🟨 Tarjetas: `{pred.get('cards', '?')}`")
+
+    if cs_home is not None and cs_away is not None:
+        lines.append(
+            f"  🔒 CS  {home1}: `{cs_home*100:.0f}%` | {away1}: `{cs_away*100:.0f}%`"
+        )
+
+    if sot:
+        lines.append(
+            f"  👁 Tiros  {home1}: `{sot['sot_home']}` | {away1}: `{sot['sot_away']}` "
+            f"Total: `{sot['sot_total']}` → `{sot['suggestion']} {sot['line']}`"
+        )
+    lines.append("")
+
+    # ── Context: form + H2H ──
     fh = pred.get("form_home", {})
     fa = pred.get("form_away", {})
-    form_home_str = f"{fh.get('emoji','➡️')} {fh.get('last5','-----')}"
-    form_away_str = f"{fa.get('emoji','➡️')} {fa.get('last5','-----')}"
+    form_home_str = f"{fh.get('emoji', '➡️')} `{fh.get('last5', '-----')}`"
+    form_away_str = f"{fa.get('emoji', '➡️')} `{fa.get('last5', '-----')}`"
 
-    # H2H section
-    h2h_section = _h2h_line(pred)
+    lines += [
+        "📈 *CONTEXTO*",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"  {home1}: {form_home_str}",
+        f"  {away1}: {form_away_str}",
+    ]
 
-    # Value bets (only shown if user supplied odds)
+    h2h = pred.get("h2h", {})
+    if h2h.get("total", 0) >= 3:
+        lines.append(
+            f"  🔄 H2H ({h2h['total']}): {home1} {h2h['home_wins']}-{h2h['draws']}-{h2h['away_wins']}"
+            f"  Prom: {h2h.get('avg_goals', 0)} goles"
+        )
+    lines.append("")
+
+    # ── Win to Nil ──
+    wtn = pred.get("win_to_nil")
+    if wtn:
+        value_tag = " ⭐ *VALOR ALTO*" if wtn.get("high_value") else ""
+        lines += [
+            "💡 *PICK ADICIONAL*",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"  🔒 Victoria a cero: *{wtn['team']}*{value_tag}",
+            "",
+        ]
+
+    # ── Value bets (only when user supplied odds) ──
     value_lines = []
     for market, val in (pred.get("value_bets") or {}).items():
         if val and val > 0:
             value_lines.append(f"  ✅ {market.capitalize()}: +{val:.3f}")
-    value_section = "\n💰 *Value Bets*\n" + "\n".join(value_lines) if value_lines else ""
+    if value_lines:
+        lines += ["💰 *VALUE BETS*", "━━━━━━━━━━━━━━━━━━━━"] + value_lines + [""]
 
-    # Clean sheet probabilities
-    cs_home = pred.get("clean_sheet_home")
-    cs_away = pred.get("clean_sheet_away")
-    cs_str = ""
-    if cs_home is not None and cs_away is not None:
-        cs_str = (
-            f"\n🔒 *Clean Sheet*\n"
-            f"  {pred['home'].split()[0]}: {cs_home*100:.0f}% | "
-            f"{pred['away'].split()[0]}: {cs_away*100:.0f}%\n"
-        )
+    # ── Sharp Game section ──
+    sharp = pred.get("sharp", {})
+    if sharp and sharp.get("is_sharp"):
+        lines += [
+            "🔱 *SHARP GAME — EDGE DETECTADO*",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"  Pick: *{sharp['pick']}* ({sharp['pick_prob']:.1f}%)",
+            f"  Edge score: `{sharp['edge_score']}`",
+        ]
+        for reason in sharp.get("reasons", [])[:4]:
+            lines.append(f"  • {reason}")
+        lines.append("")
 
-    # Shots on target (new)
-    sot = pred.get("shots_on_target")
-    sot_str = ""
-    if sot:
-        home1 = pred["home"].split()[0]
-        away1 = pred["away"].split()[0]
-        sot_str = (
-            f"👁 *Tiros a puerta*\n"
-            f"  {home1}: `{sot['sot_home']}`  {away1}: `{sot['sot_away']}`  "
-            f"Total: `{sot['sot_total']}` ({sot['suggestion']} {sot['line']})\n\n"
-        )
+    # ── Best pick + confidence ──
+    lines += [
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"💡 *Mejor Pick:* {_best_pick(pred)}",
+        f"{conf_emoji} *Confianza:* {conf}" + _live_source_badge(pred),
+    ]
 
-    # Card detail (new)
-    cd = pred.get("cards_detail")
-    corner_mkt = pred.get("corners_market", {})
-    card_line = ""
-    if cd:
-        home1 = pred["home"].split()[0]
-        away1 = pred["away"].split()[0]
-        over_label = "✅ Over 3.5" if cd["over_3_5_cards"] else "Under 3.5"
-        card_line = (
-            f"🟨 *Tarjetas* — {home1}: `{cd['yellow_home']}A` {away1}: `{cd['yellow_away']}A` "
-            f"🟥 Total rojas: `{cd['total_red']:.2f}` → {over_label}\n"
-        )
-    else:
-        card_line = f"🟨 Tarjetas: `{pred['cards']}`\n"
-
-    corners_str = ""
-    if corner_mkt and corner_mkt.get("total") is not None:
-        home1 = pred["home"].split()[0]
-        away1 = pred["away"].split()[0]
-        corners_str = (
-            f"🚩 *Córners* — {home1}: `{corner_mkt['home']}` | {away1}: `{corner_mkt['away']}` | "
-            f"Total: `{corner_mkt['total']}`\n"
-            f"  📊 Over {corner_mkt['line']}: `{corner_mkt['over_prob']}%` "
-            f"| Under: `{corner_mkt['under_prob']}%` → `{corner_mkt['suggestion']}`\n"
-        )
-    else:
-        corners_str = f"🚩 Córners: `{pred.get('corners_total', pred.get('corners', '?'))}`\n"
-
-    # Win to Nil
-    win_to_nil_str = ""
-    wtn = pred.get("win_to_nil")
-    if wtn:
-        value_tag = " ⭐ *VALOR ALTO* (probable 2-0 o 3-0)" if wtn.get("high_value") else ""
-        win_to_nil_str = (
-            f"\n💡 *Pick adicional: Victoria a cero*\n"
-            f"  🔒 {wtn['team']} gana sin recibir gol{value_tag}\n"
-        )
-
-    return (
-        f"⚽ *{pred['home']} vs {pred['away']}*{league_str}\n\n"
-        f"📊 *xG Esperado*\n"
-        f"  Local: `{pred['xg_home']}`  Visitante: `{pred['xg_away']}`\n\n"
-        f"🏆 *Probabilidades 1X2*\n"
-        f"  Local: `{pred['home_win']:.1f}%`\n"
-        f"  Empate: `{pred['draw']:.1f}%`\n"
-        f"  Visitante: `{pred['away_win']:.1f}%`\n\n"
-        f"🎯 *Marcador más probable:* `{score_str}`\n\n"
-        f"🔥 *Mercados*\n"
-        f"  Over 1.5: `{pred['over_1_5']}%`\n"
-        f"  Over 2.5: `{pred['over_2_5']}%`\n"
-        f"  Over 3.5: `{pred['over_3_5']}%`\n"
-        f"  BTTS: `{pred['btts']}%`\n\n"
-        f"{sot_str}"
-        f"📈 *Forma reciente*\n"
-        f"  {pred['home'].split()[0]}: {form_home_str}\n"
-        f"  {pred['away'].split()[0]}: {form_away_str}\n"
-        f"{h2h_section}"
-        f"{cs_str}"
-        f"{corners_str}"
-        f"{card_line}"
-        f"{value_section}"
-        f"{win_to_nil_str}\n\n"
-        f"💡 *Mejor Pick:* {_best_pick(pred)}\n"
-        f"{emoji} *Confianza:* {conf}"
-        + _live_source_badge(pred)
-    )
+    return "\n".join(lines)
 
 
 def _live_source_badge(pred: dict) -> str:
@@ -248,7 +316,7 @@ def _live_source_badge(pred: dict) -> str:
         return ""
     names = {"sofascore": "SofaScore", "thesportsdb": "TheSportsDB", "espn": "ESPN"}
     pretty = names.get(source, source.capitalize())
-    return f"\n\n📡 _Forma en vivo: {pretty}_"
+    return f"\n📡 _Forma en vivo: {pretty}_"
 
 
 # ===============================
@@ -264,6 +332,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚾ MLB: `/mlb LOCAL vs VISITANTE`\n"
         "🏈 NFL: `/nfl LOCAL vs VISITANTE`\n"
         "🎾 Tenis: `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
+        "🎰 Parlays: `/parlay` — parlays confiables del día\n\n"
         "📡 *Datos en vivo (SofaScore / TheSportsDB / ESPN)*\n"
         "  `/live [deporte]` — marcadores en vivo\n"
         "  `/scores [deporte]` — partidos de hoy\n"
@@ -293,6 +362,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔹 `/stats EQUIPO` — stats históricas del equipo\n"
         "🔹 `/value L vs V C\\_L C\\_E C\\_V` — value bets\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
+        "🎰 *PARLAYS*\n"
+        "🔹 `/parlay` — parlays confiables del día\n"
+        "  Genera combinadas con los mejores picks de hoy:\n"
+        "  🟢 SEGURA (2 patas) — prob. más alta\n"
+        "  🟡 BALANCEADA (3 patas) — relación riesgo/beneficio\n"
+        "  🔴 ARRIESGADA (4-5 patas) — mayor retorno potencial\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
         "📡 *DATOS EN VIVO* _(SofaScore / TheSportsDB / ESPN)_\n"
         "🔹 `/live [deporte]`\n"
         "  Marcadores en vivo ahora mismo.\n"
@@ -314,7 +390,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━━\n"
         "*Confianza:* 🟢 ALTA ≥55% | 🟡 MEDIA ≥42% | 🔴 BAJA\n"
         "*Forma:* 🔥📈➡️📉❄️\n\n"
-        "_Motor: Home/Away Split + Dixon-Coles + MC + Decay Form + H2H_\n"
+        "_Motor: Home/Away Split + Dixon-Coles + MC + Decay Form + H2H + Elo_\n"
+        "_Métricas: xThreat · PPDA · Field Tilt · Sharp Detector_\n"
         "_Fuentes: SofaScore · TheSportsDB · ESPN_",
         parse_mode="Markdown",
     )
@@ -1137,6 +1214,52 @@ async def tabla(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===============================
 
 
+async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Generate parlay recommendations from today's matches."""
+    await update.message.reply_text(
+        "🎰 Generando parlays del día…",
+        parse_mode="Markdown",
+    )
+
+    matches = load_today_matches()
+    if not matches:
+        await update.message.reply_text(
+            "❌ No hay partidos cargados para hoy.\nUsa `/today` para verificar.",
+            parse_mode="Markdown",
+        )
+        return
+
+    predictions = []
+    for m in matches:
+        try:
+            pred = get_full_prediction(
+                m["home"], m["away"],
+                league=m.get("league", "default"),
+                fetch_live=True,
+            )
+            predictions.append(pred)
+        except Exception as e:
+            logger.warning("Parlay: skip %s vs %s: %s", m["home"], m["away"], e)
+
+    if not predictions:
+        await update.message.reply_text(
+            "❌ No se pudieron generar predicciones para los partidos de hoy."
+        )
+        return
+
+    from core.parlay import generate_parlay_legs, build_parlays, format_parlay
+    legs = generate_parlay_legs(predictions)
+    if len(legs) < 2:
+        await update.message.reply_text(
+            "⚠️ No hay suficientes picks confiables para armar un parlay hoy."
+        )
+        return
+
+    parlays = build_parlays(legs)
+    text = format_parlay(parlays)
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
 async def send_daily_alerts(context: ContextTypes.DEFAULT_TYPE):
     """Scheduled job: send high-confidence picks to alerts channel."""
     from core.config import ALERTS_CHANNEL_ID
@@ -1202,6 +1325,7 @@ def main():
     app.add_handler(CommandHandler("predict", predict))
     app.add_handler(CommandHandler("value", value))
     app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("parlay", parlay_command))
 
     # ── Multi-sport commands ──
     app.add_handler(CommandHandler("sports", sports_command))
