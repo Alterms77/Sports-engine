@@ -73,7 +73,7 @@ DATA_PATH = os.path.join(_SPORTS_ENGINE_DIR, "data", "today_matches.csv")
 # TTL (seconds) between automatic CSV refreshes.
 # 10 minutes keeps soccer fixtures fresh throughout the day so that games
 # which start or finish during the window are cleaned out quickly.
-MATCHES_UPDATE_TTL = 600  # 10 minutes (was 15)
+MATCHES_UPDATE_TTL = 600  # 10 minutes
 
 # State for CSV refresh scheduling
 _matches_lock = threading.Lock()
@@ -457,7 +457,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎰 Parlays: `/parlay` — parlays confiables del día\n"
         "📸 Analizar tu parlay: `/checkparlay` o envía una *foto* con caption\n"
         "📋 Reportar resultado: `/resultado <id> WLW`\n"
-        "📊 Historial & calibración: `/historial`\n\n"
+        "📊 Historial & calibración: `/historial`\n"
+        "🧠 Estadísticas detalladas: `/estadisticas`\n\n"
         "🔬 *Analytics avanzados*\n"
         "  `/form EQUIPO` · `/intel L vs V` · `/markets L vs V`\n"
         "  `/bayes L vs V` · `/referee ÁRBITRO` · `/weather`\n"
@@ -512,7 +513,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  _Ej:_ `/checkparlay Burnley vs Bournemouth Over 2.5 @1.75; Lakers vs Warriors @2.10`\n"
         "📋 `/resultado [<id>] <WLWWL>` — reporta el resultado de un parlay\n"
         "  _Ej:_ `/resultado P240315-2 WLW` · W=Ganó L=Perdió X=Cancelado\n"
-        "📊 `/historial` — historial, tasas de acierto y calibración automática\n\n"
+        "📊 `/historial` — historial, tasas de acierto y calibración automática\n"
+        "🧠 `/estadisticas` — calibración por deporte, liga y mercado + tendencia\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🔍 *UNIVERSAL MARKET ERROR SCANNER*\n"
         "🔹 `/scanodds EVENTO | MERCADO | cuota@casa...`\n"
@@ -1682,6 +1684,33 @@ async def historial_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as exc:
         logger.exception("Error en /historial")
         await update.message.reply_text(f"❌ Error al obtener historial: {exc}")
+
+
+async def estadisticas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /estadisticas
+
+    Show deep analytics: model calibration by sport, league, and market type,
+    plus a sparkline trend of recent parlay results.  The model automatically
+    applies these statistics to improve future /parlay probability estimates.
+    """
+    try:
+        from core.parlay_history import (
+            get_calibration_stats,
+            get_sport_stats,
+            get_league_stats,
+            get_trend,
+            format_estadisticas,
+        )
+        cal_stats    = get_calibration_stats()
+        sport_stats  = get_sport_stats()
+        league_stats = get_league_stats()
+        trend        = get_trend(n_last=20)
+        text         = format_estadisticas(cal_stats, sport_stats, league_stats, trend)
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as exc:
+        logger.exception("Error en /estadisticas")
+        await update.message.reply_text(f"❌ Error al obtener estadísticas: {exc}")
 
 
 # ===============================
@@ -2871,9 +2900,10 @@ def main():
     app.add_handler(CommandHandler("parlay", parlay_command))
 
     # ── Parlay photo analyzer, text checker, result recorder, history ──
-    app.add_handler(CommandHandler("checkparlay", checkparlay_command))
-    app.add_handler(CommandHandler("resultado",   resultado_command))
-    app.add_handler(CommandHandler("historial",   historial_command))
+    app.add_handler(CommandHandler("checkparlay",   checkparlay_command))
+    app.add_handler(CommandHandler("resultado",     resultado_command))
+    app.add_handler(CommandHandler("historial",     historial_command))
+    app.add_handler(CommandHandler("estadisticas",  estadisticas_command))
     # PHOTO handler must come after CommandHandlers
     app.add_handler(MessageHandler(filters.PHOTO, photo_parlay_handler))
 

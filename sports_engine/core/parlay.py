@@ -93,7 +93,7 @@ def score_risk(pred: dict) -> tuple:
 
     conf = pred.get("confidence", "BAJA")
     if conf == "BAJA":
-        risk += _HIGH_RISK_SCORE + 0.05  # BAJA confidence always exceeds the high-risk threshold
+        risk = 1.0  # BAJA confidence is always excluded regardless of other factors
         reasons.append("Confianza BAJA")
     elif conf == "MEDIA":
         risk += 0.15
@@ -292,6 +292,7 @@ def generate_parlay_legs(
             "prob":             round(best["prob"], 1),
             "raw_prob":         round(raw_p, 1),
             "league":           league,
+            "sport":            str(pred.get("sport", "soccer")).lower(),
             "confidence":       conf,
             "market_type":      best["market_type"],
             "sport_emoji":      emoji,
