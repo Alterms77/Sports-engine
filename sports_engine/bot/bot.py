@@ -23,6 +23,8 @@ from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
+    MessageHandler,
+    filters,
     ContextTypes,
 )
 
@@ -109,8 +111,8 @@ def load_today_matches():
     automatically without requiring a CSV rewrite.
     """
     matches = []
-    today = datetime.now().strftime("%Y-%m-%d")
-    now_utc = datetime.utcnow()
+    today   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC for comparison
 
     # API-Sports status codes that mean the game has not yet kicked off
     _pending = {"NS", "TBD", "PST", "SUSP", "INT"}
@@ -451,7 +453,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚾ MLB: `/mlb LOCAL vs VISITANTE`\n"
         "🏈 NFL: `/nfl LOCAL vs VISITANTE`\n"
         "🎾 Tenis: `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
-        "🎰 Parlays: `/parlay` — parlays confiables del día\n\n"
+        "🎰 Parlays: `/parlay` — parlays confiables del día\n"
+        "📸 Analizar tu parlay: `/checkparlay` o envía una *foto* con caption\n\n"
         "🔬 *Analytics avanzados*\n"
         "  `/form EQUIPO` · `/intel L vs V` · `/markets L vs V`\n"
         "  `/bayes L vs V` · `/referee ÁRBITRO` · `/weather`\n"
@@ -500,7 +503,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  Modelos de mercado completos: O/U 0.5-4.5, Asian\n"
         "  Handicap -2.5→+2.5, HT/FT, CS, DNB, Double Chance.\n"
         "  _Ej:_ `/markets Liverpool vs Arsenal`\n\n"
-        "🎰 `/parlay` — parlays confiables del día\n\n"
+        "🎰 `/parlay` — parlays confiables del día\n"
+        "📸 `/checkparlay <patas>` — analiza tu parlay propio\n"
+        "  _Envía también una foto con el caption de las patas_\n"
+        "  _Ej:_ `/checkparlay Burnley vs Bournemouth Over 2.5 @1.75; Lakers vs Warriors @2.10`\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🔍 *UNIVERSAL MARKET ERROR SCANNER*\n"
         "🔹 `/scanodds EVENTO | MERCADO | cuota@casa...`\n"
@@ -1446,6 +1452,101 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = format_parlay(parlays, filtered_count=max(0, filtered_count))
     await update.message.reply_text(text, parse_mode="Markdown")
 
+
+# ── Parlay photo / text analyzer ─────────────────────────────────────────────
+
+
+async def photo_parlay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle photos sent to the bot as parlay ticket images.
+
+    The bot reads the photo's *caption* and parses it as parlay legs text.
+    If no caption is provided, usage instructions are returned.
+
+    Caption format (one leg per line):
+        Burnley vs Bournemouth | Over 2.5 | @1.75
+        Lakers vs Warriors | Moneyline | @2.10
+        Real Madrid vs Barcelona | Victoria Real Madrid | 1.45
+    """
+    caption = (update.message.caption or "").strip()
+
+    if not caption:
+        from core.parlay_analyzer import USAGE_TEXT
+        await update.message.reply_text(USAGE_TEXT, parse_mode="MarkdownV2")
+        return
+
+    await update.message.reply_text("🔍 Analizando tu parlay…", parse_mode="Markdown")
+
+    try:
+        from core.parlay_analyzer import (
+            parse_parlay_text,
+            analyze_parlay,
+            format_parlay_analysis,
+            USAGE_TEXT,
+        )
+        legs = parse_parlay_text(caption)
+        if not legs:
+            await update.message.reply_text(
+                "❌ No pude detectar patas de parlay en el caption\\.\n\n"
+                + USAGE_TEXT,
+                parse_mode="MarkdownV2",
+            )
+            return
+
+        analysis = analyze_parlay(legs)
+        await update.message.reply_text(
+            format_parlay_analysis(analysis), parse_mode="MarkdownV2"
+        )
+    except Exception as exc:
+        logger.exception("Error en análisis de parlay (foto)")
+        await update.message.reply_text(f"❌ Error al analizar el parlay: {exc}")
+
+
+async def checkparlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /checkparlay <parlay legs>
+
+    Analyze a parlay described in text. Separate legs with newlines or
+    semicolons. Include decimal or American odds for implied-probability
+    calculation; if omitted the prediction model is used as a fallback.
+
+    Examples
+    --------
+    /checkparlay Burnley vs Bournemouth Over 2.5 @1.75; Lakers vs Warriors @2.10
+    /checkparlay Real Madrid vs Barcelona | Victoria Real Madrid | 1.45
+    """
+    if not context.args:
+        from core.parlay_analyzer import USAGE_TEXT
+        await update.message.reply_text(
+            "❌ Uso: `/checkparlay <patas del parlay>`\n\n" + USAGE_TEXT,
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    raw_text = " ".join(context.args)
+    await update.message.reply_text("🔍 Analizando tu parlay…", parse_mode="Markdown")
+
+    try:
+        from core.parlay_analyzer import (
+            parse_parlay_text,
+            analyze_parlay,
+            format_parlay_analysis,
+            USAGE_TEXT,
+        )
+        legs = parse_parlay_text(raw_text)
+        if not legs:
+            await update.message.reply_text(
+                "❌ No pude parsear las patas del parlay\\.\n\n" + USAGE_TEXT,
+                parse_mode="MarkdownV2",
+            )
+            return
+
+        analysis = analyze_parlay(legs)
+        await update.message.reply_text(
+            format_parlay_analysis(analysis), parse_mode="MarkdownV2"
+        )
+    except Exception as exc:
+        logger.exception("Error en /checkparlay")
+        await update.message.reply_text(f"❌ Error al analizar el parlay: {exc}")
 
 
 # ===============================
@@ -2633,6 +2734,12 @@ def main():
     app.add_handler(CommandHandler("value", value))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("parlay", parlay_command))
+
+    # ── Parlay photo analyzer and text checker ──
+    app.add_handler(CommandHandler("checkparlay", checkparlay_command))
+    # MessageHandler must come AFTER CommandHandlers so commands in captions
+    # are not accidentally intercepted. PHOTO filter matches all photos.
+    app.add_handler(MessageHandler(filters.PHOTO, photo_parlay_handler))
 
     # ── Advanced analytics commands ──
     app.add_handler(CommandHandler("form",    form_command))
