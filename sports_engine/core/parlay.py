@@ -93,7 +93,7 @@ def score_risk(pred: dict) -> tuple:
 
     conf = pred.get("confidence", "BAJA")
     if conf == "BAJA":
-        risk += 0.55   # BAJA confidence exceeds the high-risk threshold on its own
+        risk += _HIGH_RISK_SCORE + 0.05  # BAJA confidence always exceeds the high-risk threshold
         reasons.append("Confianza BAJA")
     elif conf == "MEDIA":
         risk += 0.15
@@ -158,7 +158,11 @@ def _build_candidates(pred: dict) -> list:
         candidates.append({"pick": f"Victoria {away}", "prob": aw, "market_type": "moneyline"})
 
     # ── Soccer-specific markets ────────────────────────────────────────────
-    is_soccer = "nba" not in sport_raw and "nfl" not in sport_raw and "mlb" not in sport_raw
+    # Positive check: treat a match as soccer when the sport field contains a
+    # known soccer keyword, or when the sport field is blank (default fallback).
+    is_soccer = (not sport_raw) or any(
+        k in sport_raw for k in ("soccer", "football", "⚽")
+    )
     if is_soccer:
         dr = pred.get("draw", 0.0)
         o15 = pred.get("over_1_5", 0.0)
@@ -207,24 +211,35 @@ def generate_parlay_legs(
     max_legs       : maximum number of legs to return.
     min_confidence : minimum confidence level to include ("ALTA" or "MEDIA").
     min_prob       : minimum individual pick probability (%) to include.
+                     The threshold is applied *after* calibration so that
+                     historically over-confident markets are automatically
+                     filtered more strictly.
 
     Returns
     -------
     list of dicts, each:
       {
-        "match"       : str,
-        "pick"        : str,
-        "prob"        : float,
-        "league"      : str,
-        "confidence"  : str,
-        "market_type" : str,
-        "sport_emoji" : str,
-        "risk_reasons": list[str],
+        "match"            : str,
+        "pick"             : str,
+        "prob"             : float,   ← calibration-adjusted probability
+        "raw_prob"         : float,   ← original model probability
+        "league"           : str,
+        "confidence"       : str,
+        "market_type"      : str,
+        "sport_emoji"      : str,
+        "risk_reasons"     : list[str],
+        "calibration_note" : str,     ← "" if no adjustment was made
       }
     Sorted by prob descending, limited to max_legs, with market-variety
     constraints applied.
     """
     min_rank = _CONFIDENCE_RANK.get(min_confidence, 2)
+
+    # Load calibration function once (graceful no-op if history unavailable)
+    try:
+        from core.parlay_history import calibrate_prob as _calibrate
+    except Exception:
+        _calibrate = None
 
     # ── Step 1: Filter, score risk, pick best candidate per match ─────────
     pool = []
@@ -245,22 +260,43 @@ def generate_parlay_legs(
         match_str = f"{home} vs {away}"
 
         candidates = _build_candidates(pred)
+
+        # Apply calibration to each candidate before threshold filtering
+        if _calibrate is not None:
+            adjusted = []
+            for c in candidates:
+                raw_p  = c["prob"]
+                cal_p  = _calibrate(raw_p, c["market_type"])
+                adjusted.append(dict(c, raw_prob=raw_p, prob=cal_p))
+            candidates = adjusted
+        else:
+            for c in candidates:
+                c.setdefault("raw_prob", c["prob"])
+
         valid = [c for c in candidates if c["prob"] >= min_prob]
         if not valid:
             continue
 
-        # Best pick per match = highest probability among valid candidates
+        # Best pick per match = highest calibrated probability among valid candidates
         best = max(valid, key=lambda x: x["prob"])
+        raw_p = best.get("raw_prob", best["prob"])
+        cal_note = (
+            f"ajustado {raw_p:.1f}%→{best['prob']:.1f}%"
+            if abs(best["prob"] - raw_p) >= 0.5
+            else ""
+        )
 
         pool.append({
-            "match":        match_str,
-            "pick":         best["pick"],
-            "prob":         round(best["prob"], 1),
-            "league":       league,
-            "confidence":   conf,
-            "market_type":  best["market_type"],
-            "sport_emoji":  emoji,
-            "risk_reasons": risk_reasons,
+            "match":            match_str,
+            "pick":             best["pick"],
+            "prob":             round(best["prob"], 1),
+            "raw_prob":         round(raw_p, 1),
+            "league":           league,
+            "confidence":       conf,
+            "market_type":      best["market_type"],
+            "sport_emoji":      emoji,
+            "risk_reasons":     risk_reasons,
+            "calibration_note": cal_note,
         })
 
     # ── Step 2: Sort by probability descending ────────────────────────────
@@ -348,12 +384,23 @@ def build_parlays(legs: list) -> dict:
 
 # ── Telegram formatter ─────────────────────────────────────────────────────────
 
-def format_parlay(parlays: dict, filtered_count: int = 0) -> str:
+def format_parlay(
+    parlays: dict,
+    filtered_count: int = 0,
+    parlay_id: str = "",
+) -> str:
     """
     Format the parlay output for Telegram.
 
     Returns Markdown-compatible string with box-style layout.
     Includes sport emoji and market type in each leg.
+
+    Parameters
+    ----------
+    parlays       : output of ``build_parlays``
+    filtered_count: number of matches excluded for high risk / low confidence
+    parlay_id     : unique ID returned by ``parlay_history.save_parlay``
+                    (shown at the bottom so the user can report results)
     """
     lines = [
         "╔══════════════════════════════════╗",
@@ -370,6 +417,8 @@ def format_parlay(parlays: dict, filtered_count: int = 0) -> str:
 
     _numbers = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
 
+    any_calibrated = False  # track whether any calibration note exists
+
     for key, emoji, label, _ in tiers:
         tier = parlays.get(key)
         if not tier:
@@ -382,10 +431,14 @@ def format_parlay(parlays: dict, filtered_count: int = 0) -> str:
         for i, leg in enumerate(tier_legs):
             num = _numbers[i] if i < len(_numbers) else f"{i + 1}."
             sport_e = leg.get("sport_emoji", "")
-            prefix = f"{sport_e} " if sport_e else ""
+            prefix  = f"{sport_e} " if sport_e else ""
+            cal     = leg.get("calibration_note", "")
+            cal_tag = f" _↺{cal}_" if cal else ""
             lines.append(
-                f"  {num} {prefix}{leg['match']} → {leg['pick']} ({leg['prob']}%)"
+                f"  {num} {prefix}{leg['match']} → {leg['pick']} ({leg['prob']}%){cal_tag}"
             )
+            if cal:
+                any_calibrated = True
         lines.append(f"📊 Prob. combinada: *{tier['combined_prob']}%*")
         lines.append("")
 
@@ -397,6 +450,18 @@ def format_parlay(parlays: dict, filtered_count: int = 0) -> str:
         lines.append(
             f"🔍 _{filtered_count} partido(s) excluido(s) por alto riesgo o baja confianza._"
         )
+        lines.append("")
+
+    if any_calibrated:
+        lines.append("↺ _Prob. ajustada según historial de resultados._")
+        lines.append("")
+
+    if parlay_id:
+        lines.append(f"🆔 ID: `{parlay_id}`")
+        lines.append(
+            f"📝 _Reporta resultados: `/resultado {parlay_id} WLW`_"
+        )
+        lines.append("_  (W=Ganó, L=Perdió, X=Cancelado — una letra por pata)_")
         lines.append("")
 
     lines.append("⚠️ _Las parlays son recreativas. Apuesta responsablemente._")

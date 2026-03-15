@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import csv
 import logging
@@ -454,7 +455,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🏈 NFL: `/nfl LOCAL vs VISITANTE`\n"
         "🎾 Tenis: `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
         "🎰 Parlays: `/parlay` — parlays confiables del día\n"
-        "📸 Analizar tu parlay: `/checkparlay` o envía una *foto* con caption\n\n"
+        "📸 Analizar tu parlay: `/checkparlay` o envía una *foto* con caption\n"
+        "📋 Reportar resultado: `/resultado <id> WLW`\n"
+        "📊 Historial & calibración: `/historial`\n\n"
         "🔬 *Analytics avanzados*\n"
         "  `/form EQUIPO` · `/intel L vs V` · `/markets L vs V`\n"
         "  `/bayes L vs V` · `/referee ÁRBITRO` · `/weather`\n"
@@ -506,7 +509,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎰 `/parlay` — parlays confiables del día\n"
         "📸 `/checkparlay <patas>` — analiza tu parlay propio\n"
         "  _Envía también una foto con el caption de las patas_\n"
-        "  _Ej:_ `/checkparlay Burnley vs Bournemouth Over 2.5 @1.75; Lakers vs Warriors @2.10`\n\n"
+        "  _Ej:_ `/checkparlay Burnley vs Bournemouth Over 2.5 @1.75; Lakers vs Warriors @2.10`\n"
+        "📋 `/resultado [<id>] <WLWWL>` — reporta el resultado de un parlay\n"
+        "  _Ej:_ `/resultado P240315-2 WLW` · W=Ganó L=Perdió X=Cancelado\n"
+        "📊 `/historial` — historial, tasas de acierto y calibración automática\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🔍 *UNIVERSAL MARKET ERROR SCANNER*\n"
         "🔹 `/scanodds EVENTO | MERCADO | cuota@casa...`\n"
@@ -1429,6 +1435,7 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Build parlays: only ALTA confidence, ≥ 75 % probability ──────────
     from core.parlay import generate_parlay_legs, build_parlays, format_parlay
+    from core.parlay_history import save_parlay as _save_parlay
 
     total_matches = len(predictions)
     legs = generate_parlay_legs(
@@ -1449,7 +1456,30 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     parlays = build_parlays(legs)
-    text = format_parlay(parlays, filtered_count=max(0, filtered_count))
+
+    # ── Save to history (use the most ambitious tier's legs & prob) ───────
+    try:
+        # Determine the "main" tier to save: prefer balanced, else safe
+        for tier_key in ("balanced", "safe", "risky"):
+            tier_data = parlays.get(tier_key)
+            if tier_data:
+                parlay_id = _save_parlay(
+                    tier_data["legs"],
+                    tier_key,
+                    tier_data["combined_prob"],
+                )
+                break
+        else:
+            parlay_id = ""
+    except Exception as exc:
+        logger.warning("parlay_command: could not save to history: %s", exc)
+        parlay_id = ""
+
+    text = format_parlay(
+        parlays,
+        filtered_count=max(0, filtered_count),
+        parlay_id=parlay_id,
+    )
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
@@ -1547,6 +1577,111 @@ async def checkparlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as exc:
         logger.exception("Error en /checkparlay")
         await update.message.reply_text(f"❌ Error al analizar el parlay: {exc}")
+
+
+# ── Parlay result recording and history ──────────────────────────────────────
+
+
+async def resultado_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /resultado [<id>] <WLWWL>
+
+    Record the outcome of each leg in a previously generated parlay.
+
+    - ``W`` = ganó (won)
+    - ``L`` = perdió (lost)
+    - ``X`` = cancelado / void
+
+    If ``<id>`` is omitted the most recently generated parlay is used.
+
+    Examples
+    --------
+    /resultado P240315-2 WLW
+    /resultado WWL        ← uses the last parlay
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso: `/resultado [<id>] <WLWWL>`\n\n"
+            "Ejemplo: `/resultado P240315-2 WLW`\n"
+            "O para el último parlay: `/resultado WWL`\n\n"
+            "W = Ganó · L = Perdió · X = Cancelado",
+            parse_mode="Markdown",
+        )
+        return
+
+    from core.parlay_history import (
+        record_results,
+        get_last_parlay_id,
+        format_result_confirmation,
+        PARLAY_ID_RE,
+    )
+
+    args = context.args
+
+    # Determine whether first arg is a parlay ID or result string
+    if len(args) >= 2 and PARLAY_ID_RE.match(args[0]):
+        parlay_id   = args[0].upper()
+        results_str = "".join(args[1:]).upper()
+    else:
+        # No ID — use last generated parlay
+        parlay_id = get_last_parlay_id() or ""
+        results_str = "".join(args).upper()
+
+    if not parlay_id:
+        await update.message.reply_text(
+            "❌ No hay parlays guardados aún. Genera uno con `/parlay` primero.",
+            parse_mode="Markdown",
+        )
+        return
+
+    # Validate result chars
+    invalid = [c for c in results_str if c not in ("W", "L", "X")]
+    if invalid or not results_str:
+        await update.message.reply_text(
+            f"❌ Formato inválido: `{results_str}`\n\n"
+            "Solo se aceptan W (ganó), L (perdió) y X (cancelado).\n"
+            "Ejemplo: `WLW` para 3 patas (1ª ganó, 2ª perdió, 3ª ganó).",
+            parse_mode="Markdown",
+        )
+        return
+
+    results_list = list(results_str)
+    outcome = record_results(parlay_id, results_list)
+
+    if not outcome["found"]:
+        await update.message.reply_text(
+            f"❌ Parlay `{parlay_id}` no encontrado.\n"
+            "Usa `/historial` para ver los IDs guardados.",
+            parse_mode="Markdown",
+        )
+        return
+
+    await update.message.reply_text(
+        format_result_confirmation(outcome), parse_mode="Markdown"
+    )
+
+
+async def historial_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /historial
+
+    Show recent parlay history, win rate, and calibration statistics.
+    The calibration data is used automatically by future /parlay calls to
+    adjust predicted probabilities toward observed hit rates.
+    """
+    try:
+        from core.parlay_history import (
+            get_history,
+            get_calibration_stats,
+            format_history_summary,
+        )
+        records   = get_history(limit=15)
+        cal_stats = get_calibration_stats()
+        text      = format_history_summary(records, cal_stats)
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as exc:
+        logger.exception("Error en /historial")
+        await update.message.reply_text(f"❌ Error al obtener historial: {exc}")
 
 
 # ===============================
@@ -2735,10 +2870,11 @@ def main():
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("parlay", parlay_command))
 
-    # ── Parlay photo analyzer and text checker ──
+    # ── Parlay photo analyzer, text checker, result recorder, history ──
     app.add_handler(CommandHandler("checkparlay", checkparlay_command))
-    # MessageHandler must come AFTER CommandHandlers so commands in captions
-    # are not accidentally intercepted. PHOTO filter matches all photos.
+    app.add_handler(CommandHandler("resultado",   resultado_command))
+    app.add_handler(CommandHandler("historial",   historial_command))
+    # PHOTO handler must come after CommandHandlers
     app.add_handler(MessageHandler(filters.PHOTO, photo_parlay_handler))
 
     # ── Advanced analytics commands ──

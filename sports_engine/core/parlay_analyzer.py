@@ -63,8 +63,8 @@ def _prob_from_text(text: str) -> tuple:
     if am:
         try:
             val = int(am.group(1) + am.group(2))
-            # Sanity check: American odds are outside the range [-9999, +9999]
-            # and never 0 or -100 exactly (that would be 50/50, unusual)
+            # Sanity check: American odds are within the range [-9999, +9999]
+            # and never exactly 0.
             if -9999 <= val <= 9999 and val != 0:
                 return american_to_prob(val), am.group(0)
         except ValueError:
