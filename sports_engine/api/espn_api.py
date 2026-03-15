@@ -35,7 +35,9 @@ SPORT_PATHS = {
 
 # ── In-memory cache: {cache_key: (data, timestamp)} ──────────────────────────
 _CACHE: dict = {}
-CACHE_TTL = 1800  # 30 minutes
+# Scoreboard data is cached for 10 minutes so game statuses (Scheduled /
+# In Progress / Final) stay reasonably fresh without hammering the ESPN API.
+CACHE_TTL = 600  # 10 minutes (previously 30 minutes)
 
 
 def _normalize(text: str) -> str:

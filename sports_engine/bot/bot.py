@@ -4,7 +4,7 @@ import csv
 import logging
 import threading
 import time as _time
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 # Allow importing from sports_engine/ regardless of working directory
@@ -67,8 +67,10 @@ logger = logging.getLogger(__name__)
 
 DATA_PATH = os.path.join(_SPORTS_ENGINE_DIR, "data", "today_matches.csv")
 
-# TTL (seconds) between automatic CSV refreshes for /today
-MATCHES_UPDATE_TTL = 900  # 15 minutes
+# TTL (seconds) between automatic CSV refreshes.
+# 10 minutes keeps soccer fixtures fresh throughout the day so that games
+# which start or finish during the window are cleaned out quickly.
+MATCHES_UPDATE_TTL = 600  # 10 minutes (was 15)
 
 # State for CSV refresh scheduling
 _matches_lock = threading.Lock()
@@ -95,7 +97,23 @@ def _refresh_matches_if_stale() -> None:
 
 
 def load_today_matches():
+    """Load upcoming soccer matches from the local CSV.
+
+    Filters applied at read time (defensive double-check):
+    - ``date`` column must equal today's date.
+    - ``status`` column (if present) must indicate a not-started game.
+    - ``kickoff_utc`` column (if present) must be in the future.
+
+    These filters mirror what ``update_matches()`` applies when writing, so
+    stale rows left over from a previous run of the update job are discarded
+    automatically without requiring a CSV rewrite.
+    """
     matches = []
+    today = datetime.now().strftime("%Y-%m-%d")
+    now_utc = datetime.utcnow()
+
+    # API-Sports status codes that mean the game has not yet kicked off
+    _pending = {"NS", "TBD", "PST", "SUSP", "INT"}
 
     if not os.path.exists(DATA_PATH):
         logger.warning("Archivo no encontrado: %s", DATA_PATH)
@@ -105,13 +123,90 @@ def load_today_matches():
         with open(DATA_PATH, newline="", encoding="utf-8") as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
+                # Date filter
+                row_date = row.get("date", "").strip()
+                if row_date and row_date != today:
+                    continue
+
+                # Status filter: skip live / finished games
+                status = row.get("status", "NS").strip()
+                if status and status not in _pending:
+                    continue
+
+                # Kickoff time filter: skip games already past kick-off
+                kickoff_str = row.get("kickoff_utc", "").strip()
+                if kickoff_str:
+                    try:
+                        # normalise to a naive UTC datetime for comparison
+                        kickoff_dt = datetime.fromisoformat(
+                            kickoff_str.replace("Z", "+00:00")
+                        )
+                        if kickoff_dt.tzinfo is not None:
+                            kickoff_dt = kickoff_dt.astimezone(timezone.utc).replace(tzinfo=None)
+                        if kickoff_dt <= now_utc:
+                            continue
+                    except (ValueError, TypeError):
+                        pass  # keep if unparseable
+
                 matches.append({
                     "home": row["home"].strip(),
                     "away": row["away"].strip(),
                     "league": row.get("league", "").strip(),
+                    "sport": "soccer",
                 })
     except Exception as e:
         logger.error("Error al cargar partidos: %s", e)
+
+    return matches
+
+
+def load_today_matches_multisport() -> list:
+    """Return a unified list of upcoming today's matches across Soccer, NBA, NFL, and MLB.
+
+    Only games that have **not yet started** are included so that `/parlay`
+    never produces picks for games already in progress or finished.
+
+    Sources
+    -------
+    - Soccer : local ``today_matches.csv`` (API-Sports, filtered to upcoming)
+    - NBA / NFL / MLB : ESPN public scoreboard API (no key required)
+
+    Each item in the returned list has at minimum:
+      ``sport``, ``home``, ``away``, ``league``
+    """
+    matches: list = []
+
+    # ── Soccer from local CSV (already filtered to upcoming games) ─────────
+    matches.extend(load_today_matches())
+
+    # ── NBA / NFL / MLB from ESPN ──────────────────────────────────────────
+    # ESPN status strings that indicate a game has not yet started.
+    _espn_scheduled = {"Scheduled", "Pregame", "Pre-Game"}
+
+    try:
+        from api.espn_api import get_scoreboard
+        for sport in ("nba", "nfl", "mlb"):
+            try:
+                games = get_scoreboard(sport)
+                for g in games:
+                    status = g.get("status", "Scheduled")
+                    if status not in _espn_scheduled:
+                        # Game is live or finished — skip for parlay purposes
+                        logger.debug(
+                            "Multisport loader: skipping %s vs %s (%s) — status: %s",
+                            g["home"], g["away"], sport, status,
+                        )
+                        continue
+                    matches.append({
+                        "home": g["home"],
+                        "away": g["away"],
+                        "league": sport.upper(),
+                        "sport": sport,
+                    })
+            except Exception as exc:
+                logger.warning("ESPN scoreboard unavailable for %s: %s", sport, exc)
+    except Exception as exc:
+        logger.warning("ESPN API import failed: %s", exc)
 
     return matches
 
@@ -1278,13 +1373,17 @@ async def tabla(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generate parlay recommendations from today's matches."""
+    """Generate parlay recommendations from today's matches (Soccer + NBA/NFL/MLB)."""
     await update.message.reply_text(
         "🎰 Generando parlays del día…",
         parse_mode="Markdown",
     )
 
-    matches = load_today_matches()
+    # ── Refresh soccer CSV if stale ────────────────────────────────────────
+    _refresh_matches_if_stale()
+
+    # ── Load today's matches across all supported sports ──────────────────
+    matches = load_today_matches_multisport()
     if not matches:
         await update.message.reply_text(
             "❌ No hay partidos cargados para hoy.\nUsa `/today` para verificar.",
@@ -1292,17 +1391,29 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ── Run predictions for every match using the correct sport module ────
     predictions = []
     for m in matches:
+        sport = m.get("sport", "soccer").lower()
+        home, away = m["home"], m["away"]
         try:
-            pred = get_full_prediction(
-                m["home"], m["away"],
-                league=m.get("league", "default"),
-                fetch_live=True,
-            )
+            if sport == "nba":
+                pred = _bball.predict_game(home, away)
+            elif sport == "nfl":
+                pred = _nfl.predict_game(home, away)
+            elif sport == "mlb":
+                pred = _baseball.predict_game(home, away)
+            else:
+                # Soccer / football
+                pred = get_full_prediction(
+                    home, away,
+                    league=m.get("league", "default"),
+                    fetch_live=True,
+                )
+            pred.setdefault("league", m.get("league", ""))
             predictions.append(pred)
         except Exception as e:
-            logger.warning("Parlay: skip %s vs %s: %s", m["home"], m["away"], e)
+            logger.warning("Parlay: skip %s vs %s (%s): %s", home, away, sport, e)
 
     if not predictions:
         await update.message.reply_text(
@@ -1310,16 +1421,29 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ── Build parlays: only ALTA confidence, ≥ 75 % probability ──────────
     from core.parlay import generate_parlay_legs, build_parlays, format_parlay
-    legs = generate_parlay_legs(predictions)
+
+    total_matches = len(predictions)
+    legs = generate_parlay_legs(
+        predictions,
+        min_confidence="ALTA",
+        min_prob=75.0,
+    )
+    filtered_count = total_matches - len(
+        [p for p in predictions if p.get("confidence") == "ALTA"]
+    )
+
     if len(legs) < 2:
         await update.message.reply_text(
-            "⚠️ No hay suficientes picks confiables para armar un parlay hoy."
+            "⚠️ No hay suficientes picks de alta confianza para armar un parlay hoy.\n"
+            f"_(Se analizaron {total_matches} partido(s); ninguno alcanzó los criterios mínimos)_",
+            parse_mode="Markdown",
         )
         return
 
     parlays = build_parlays(legs)
-    text = format_parlay(parlays)
+    text = format_parlay(parlays, filtered_count=max(0, filtered_count))
     await update.message.reply_text(text, parse_mode="Markdown")
 
 

@@ -93,7 +93,7 @@ def score_risk(pred: dict) -> tuple:
 
     conf = pred.get("confidence", "BAJA")
     if conf == "BAJA":
-        risk += 0.40
+        risk += 0.55   # BAJA confidence exceeds the high-risk threshold on its own
         reasons.append("Confianza BAJA")
     elif conf == "MEDIA":
         risk += 0.15
@@ -268,16 +268,22 @@ def generate_parlay_legs(
 
     # ── Step 3: Apply variety constraints ─────────────────────────────────
     # Allow at most _MAX_SAME_MARKET legs of the same market type.
+    # Only one leg per match (deduplication by match name).
     selected: list = []
     market_counts: dict = {}
+    used_matches: set = set()
 
     for leg in pool:
         if len(selected) >= max_legs:
             break
         mtype = leg["market_type"]
+        match_name = leg["match"]
+        if match_name in used_matches:
+            continue
         if market_counts.get(mtype, 0) >= _MAX_SAME_MARKET:
             continue
         market_counts[mtype] = market_counts.get(mtype, 0) + 1
+        used_matches.add(match_name)
         selected.append(leg)
 
     return selected
@@ -364,7 +370,7 @@ def format_parlay(parlays: dict, filtered_count: int = 0) -> str:
 
     _numbers = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
 
-    for key, emoji, label, _patas in tiers:
+    for key, emoji, label, _ in tiers:
         tier = parlays.get(key)
         if not tier:
             continue

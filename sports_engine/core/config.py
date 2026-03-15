@@ -8,6 +8,19 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Load .env file into os.environ if it exists (local development / tests).
+# This is intentionally called here — at the top of the config module —
+# so that every entry point (bot.py, update_matches.py, scripts, tests)
+# picks up the .env file regardless of whether load_dotenv() was called
+# earlier. python-dotenv's default behaviour does NOT override values that
+# are already set in the real environment, so Railway / Docker env vars are
+# always respected.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(override=False)
+except ImportError:
+    pass  # python-dotenv not installed; rely on real environment variables
+
 # ===============================
 # 🔑 SECRETS (loaded from environment; empty string signals "not set"
 #             and is checked / rejected by validate_config())

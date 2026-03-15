@@ -166,7 +166,7 @@ class TestScanOnceMarketError:
         ]
 
         with patch("api.odds_api.get_all_odds", return_value=scans):
-            with patch("core.config.ODDS_API_KEY", "fake-key"):
+            with patch.dict("os.environ", {"ODDS_API_KEY": "fake-key"}):
                 with patch("core.config.AUTO_SCAN_MIN_EV", 0.0):
                     with patch("core.config.AUTO_SCAN_DEDUP_TTL", 3600):
                         result = asyncio.get_event_loop().run_until_complete(
