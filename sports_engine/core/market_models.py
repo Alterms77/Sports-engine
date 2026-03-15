@@ -38,11 +38,11 @@ def compute_goals_lines(xg_home: float, xg_away: float) -> Dict:
     matrix = _build_score_matrix(xg_home, xg_away)
     result = {}
     for n in range(5):
-        line = float(n) + 0.5
-        over = sum(p for (hg, ag), p in matrix.items() if hg + ag > line)
-        key  = f"over_{n + 1}_5"
-        result[key]             = round(over * 100, 1)
-        result[key.replace("over", "under")] = round((1 - over) * 100, 1)
+        line     = float(n) + 0.5
+        over     = sum(p for (hg, ag), p in matrix.items() if hg + ag > line)
+        over_key = f"over_{n}_5"
+        result[over_key]                       = round(over * 100, 1)
+        result[over_key.replace("over", "under")] = round((1 - over) * 100, 1)
     return result
 
 
@@ -141,11 +141,11 @@ def format_market_model(
         lines += [
             "⚽ *GOLES — OVER/UNDER*",
             "━━━━━━━━━━━━━━━━━━━━",
-            f"  Over 0.5: `{gl.get('over_1_5', 0)}%`   Under 0.5: `{gl.get('under_1_5', 0)}%`",
+            f"  Over 0.5: `{gl.get('over_0_5', 0)}%`   Under 0.5: `{gl.get('under_0_5', 0)}%`",
         ]
         for n, label in [(1, "1.5"), (2, "2.5"), (3, "3.5"), (4, "4.5")]:
-            over_key  = f"over_{n + 1}_5"
-            under_key = f"under_{n + 1}_5"
+            over_key  = f"over_{n}_5"
+            under_key = f"under_{n}_5"
             lines.append(
                 f"  Over {label}: `{gl.get(over_key, 0)}%`   Under {label}: `{gl.get(under_key, 0)}%`"
             )

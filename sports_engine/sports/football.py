@@ -542,6 +542,13 @@ def predict_match(
         "away_elo": away_elo,
     }
 
+    # ── Advanced predictions (DNB, Double Chance, AH, HT/FT, team totals) ──
+    try:
+        from core.advanced_predictions import compute_all_advanced
+        result["advanced_predictions"] = compute_all_advanced(xg_home, xg_away, result)
+    except Exception:
+        result["advanced_predictions"] = {}
+
     # ── Sharp game detection (needs full result dict) ──
     try:
         from core.sharp import detect_sharp_game

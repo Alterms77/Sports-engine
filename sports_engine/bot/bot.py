@@ -333,6 +333,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🏈 NFL: `/nfl LOCAL vs VISITANTE`\n"
         "🎾 Tenis: `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
         "🎰 Parlays: `/parlay` — parlays confiables del día\n\n"
+        "🔬 *Analytics avanzados*\n"
+        "  `/form EQUIPO` — form engine profundo\n"
+        "  `/intel LOCAL vs VISITANTE` — game intelligence\n"
+        "  `/markets LOCAL vs VISITANTE` — modelos de mercado\n\n"
+        "🔍 *Market Error Scanner (universal)*\n"
+        "  `/scanodds EVENTO | MERCADO | cuota@casa...`\n"
+        "  `/scanner` — escanear mercados en seguimiento\n"
+        "  `/addmarket DEPORTE | EVENTO | MERCADO | cuota@casa...`\n\n"
         "📡 *Datos en vivo (SofaScore / TheSportsDB / ESPN)*\n"
         "  `/live [deporte]` — marcadores en vivo\n"
         "  `/scores [deporte]` — partidos de hoy\n"
@@ -340,12 +348,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  `/tabla LIGA` — clasificación\n\n"
         "📅 `/today` — todos los partidos de hoy\n"
         "🏟️ `/sports` — ver todos los comandos\n"
-        "❓ `/help` — ayuda detallada\n\n"
-        "_Ejemplos:_\n"
-        "`/predict América vs Chivas`\n"
-        "`/live futbol`\n"
-        "`/liveteam Barcelona`\n"
-        "`/tabla Premier League`",
+        "❓ `/help` — ayuda detallada",
         parse_mode="Markdown",
     )
 
@@ -356,42 +359,54 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━━\n"
         "⚽ *FÚTBOL*\n"
         "🔹 `/predict LOCAL vs VISITANTE`\n"
-        "  xG, 1X2, Over/BTTS, marcador probable, forma en vivo,\n"
-        "  H2H, córners, tarjetas. Usa SofaScore/TheSportsDB.\n"
+        "  xG, xThreat, PPDA, Field Tilt, 1X2, Over/BTTS,\n"
+        "  marcador probable, forma en vivo, H2H, córners, tarjetas.\n"
         "  _Ej:_ `/predict Real Madrid vs Barcelona`\n\n"
-        "🔹 `/stats EQUIPO` — stats históricas del equipo\n"
-        "🔹 `/value L vs V C\\_L C\\_E C\\_V` — value bets\n\n"
+        "🔹 `/value L vs V C\\_L C\\_E C\\_V` — Betting Intelligence\n"
+        "  Kelly, EV, margen de la casa, cuotas justas.\n"
+        "🔹 `/stats EQUIPO` — stats históricas del equipo\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "🎰 *PARLAYS*\n"
-        "🔹 `/parlay` — parlays confiables del día\n"
-        "  Genera combinadas con los mejores picks de hoy:\n"
-        "  🟢 SEGURA (2 patas) — prob. más alta\n"
-        "  🟡 BALANCEADA (3 patas) — relación riesgo/beneficio\n"
-        "  🔴 ARRIESGADA (4-5 patas) — mayor retorno potencial\n\n"
+        "🔬 *ANALYTICS AVANZADOS*\n"
+        "🔹 `/form EQUIPO`\n"
+        "  Team Form Engine profundo: PPG, BTTS, Over rates,\n"
+        "  CS rate, FTS, consistencia goleadora, tendencia.\n"
+        "  _Ej:_ `/form América`\n\n"
+        "🔹 `/intel LOCAL vs VISITANTE`\n"
+        "  Game Intelligence: rachas BTTS/Over/CS, patrón H2H,\n"
+        "  trampa detectada, señal Over/BTTS agregada.\n"
+        "  _Ej:_ `/intel Barcelona vs Real Madrid`\n\n"
+        "🔹 `/markets LOCAL vs VISITANTE`\n"
+        "  Modelos de mercado completos: O/U 0.5-4.5, Asian\n"
+        "  Handicap -2.5→+2.5, HT/FT, CS, DNB, Double Chance.\n"
+        "  _Ej:_ `/markets Liverpool vs Arsenal`\n\n"
+        "🎰 `/parlay` — parlays confiables del día\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🔍 *UNIVERSAL MARKET ERROR SCANNER*\n"
+        "🔹 `/scanodds EVENTO | MERCADO | cuota@casa...`\n"
+        "  Detecta errores de cuota al instante. Válido para cualquier\n"
+        "  deporte (fútbol, NBA, MMA, esports...) y cualquier mercado\n"
+        "  (goles, props jugador, corners, puntos, etc.).\n"
+        "  _Ej:_ `/scanodds Madrid vs Barça | Victoria Madrid | 1.90@Bet365 2.50@Caliente 1.85@Codere`\n"
+        "  _Ej:_ `/scanodds NBA | Lakers vs Warriors | LeBron Pts +25.5 | 1.85@Betway 2.20@Caliente`\n\n"
+        "🔹 `/scanner [DEPORTE]` — escanear todos los mercados guardados\n"
+        "🔹 `/addmarket DEPORTE | EVENTO | MERCADO | cuota@casa...`\n"
+        "  Agrega mercado a seguimiento continuo (auto-escaneado c/15 min).\n"
+        "🔹 `/clearmarkets` — borrar todos los mercados en seguimiento\n\n"
+        "  *Alertas:*\n"
+        "  🟡 Value Opportunity  ≥20% sobre promedio\n"
+        "  🔥 High Value         ≥30% sobre promedio\n"
+        "  🚨 Market Error       ≥40% sobre promedio\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "📡 *DATOS EN VIVO* _(SofaScore / TheSportsDB / ESPN)_\n"
-        "🔹 `/live [deporte]`\n"
-        "  Marcadores en vivo ahora mismo.\n"
-        "  Deportes: `futbol` `nba` `nfl` `mlb` `tenis`\n"
-        "  _Ej:_ `/live futbol`\n\n"
-        "🔹 `/scores [deporte] [YYYY-MM-DD]`\n"
-        "  Todos los partidos del día (o fecha específica).\n"
-        "  _Ej:_ `/scores nba`  `/scores futbol 2026-03-15`\n\n"
-        "🔹 `/liveteam EQUIPO`\n"
-        "  Últimos 5 resultados + próximos partidos en vivo.\n"
-        "  _Ej:_ `/liveteam Barcelona`\n\n"
-        "🔹 `/tabla LIGA`\n"
-        "  Clasificación de la liga.\n"
-        "  Ligas: Premier League, La Liga, Bundesliga, Serie A, Ligue 1, Liga MX\n"
-        "  _Ej:_ `/tabla Bundesliga`\n\n"
+        "🔹 `/live [deporte]` | `/scores [deporte]`\n"
+        "🔹 `/liveteam EQUIPO` | `/tabla LIGA`\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🏀 `/nba H vs V` | ⚾ `/mlb H vs V` | 🏈 `/nfl H vs V`\n"
         "🎾 `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "*Confianza:* 🟢 ALTA ≥55% | 🟡 MEDIA ≥42% | 🔴 BAJA\n"
-        "*Forma:* 🔥📈➡️📉❄️\n\n"
         "_Motor: Home/Away Split + Dixon-Coles + MC + Decay Form + H2H + Elo_\n"
-        "_Métricas: xThreat · PPDA · Field Tilt · Sharp Detector_\n"
+        "_Métricas: xThreat · PPDA · Field Tilt · Sharp · AH · HT/FT_\n"
         "_Fuentes: SofaScore · TheSportsDB · ESPN_",
         parse_mode="Markdown",
     )
@@ -498,6 +513,7 @@ async def predict(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /value LOCAL vs VISITANTE C_HOME C_DRAW C_AWAY
+    Enhanced with full Betting Intelligence: Kelly, EV, margin, fair odds.
     Example: /value América vs Chivas 1.80 3.40 4.50
     """
     if not context.args or len(context.args) < 5:
@@ -508,7 +524,6 @@ async def value(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Last 3 args are the odds
     try:
         odds_away = float(context.args[-1])
         odds_draw = float(context.args[-2])
@@ -520,7 +535,6 @@ async def value(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Everything before the odds is the match string
     match_text = " ".join(context.args[:-3])
 
     if " vs " not in match_text.lower():
@@ -534,34 +548,16 @@ async def value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     home = home_raw.strip()
     away = away_raw.strip()
 
-    await update.message.reply_text("⏳ Calculando value bets…")
+    await update.message.reply_text("⏳ Calculando Betting Intelligence…")
 
     try:
         user_odds = {"home": odds_home, "draw": odds_draw, "away": odds_away}
         prediction = get_full_prediction(home, away, odds=user_odds)
 
-        vb = prediction.get("value_bets", {})
-
-        lines = [f"💰 *Value Bets — {prediction['home']} vs {prediction['away']}*\n"]
-        labels = {
-            "home": f"Victoria {prediction['home']}",
-            "draw": "Empate",
-            "away": f"Victoria {prediction['away']}",
-        }
-        has_value = False
-        for market in ("home", "draw", "away"):
-            val = vb.get(market, 0) or 0
-            prob = {"home": prediction["home_win"], "draw": prediction["draw"], "away": prediction["away_win"]}[market]
-            o = {"home": odds_home, "draw": odds_draw, "away": odds_away}[market]
-            indicator = "✅ VALUE" if val > 0 else "❌ Sin value"
-            lines.append(f"  {labels[market]} @ {o:.2f}\n    Prob: {prob:.1f}% | Value: {val:+.3f} {indicator}\n")
-            if val > 0:
-                has_value = True
-
-        if not has_value:
-            lines.append("\n⚠️ No hay value en ninguno de los mercados con estas cuotas.")
-
-        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        from core.betting_intelligence import analyze_betting_markets, format_betting_intelligence
+        analysis = analyze_betting_markets(prediction, user_odds)
+        text = format_betting_intelligence(analysis, prediction)
+        await update.message.reply_text(text, parse_mode="Markdown")
 
     except ValueError as e:
         await update.message.reply_text(f"❌ {e}")
@@ -1260,6 +1256,416 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+
+# ===============================
+# 🔬 ANALYTICS COMMANDS
+# ===============================
+
+
+async def form_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /form EQUIPO
+    Show deep Team Form Engine analysis for a team.
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso: `/form EQUIPO`\nEjemplo: `/form América`",
+            parse_mode="Markdown",
+        )
+        return
+
+    team_name = " ".join(context.args)
+    await update.message.reply_text("⏳ Analizando forma del equipo…")
+
+    try:
+        from sports.football import resolve_team, MATCH_HISTORY, HOME_STATS, AWAY_STATS
+        resolved = resolve_team(team_name)
+        if not resolved:
+            suggestions = suggest_teams(team_name)
+            tip = ""
+            if suggestions:
+                tip = "\n\n¿Quisiste decir?\n" + "\n".join(f"  • {t}" for t in suggestions)
+            await update.message.reply_text(f"❌ Equipo '{team_name}' no encontrado.{tip}")
+            return
+
+        from core.form_engine import analyze_team_form, format_form_report
+        history  = MATCH_HISTORY.get(resolved, [])
+        all_form  = analyze_team_form(history, last_n=10)
+        home_form = analyze_team_form(history, home_only=True, last_n=8)
+        away_form = analyze_team_form(history, away_only=True, last_n=8)
+
+        home_report = format_form_report(resolved, all_form, home_form, is_home=True)
+        away_report = format_form_report(resolved, all_form, away_form, is_home=False)
+
+        text = (
+            "╔══════════════════════════════════╗\n"
+            f"  📊 FORM ENGINE — {resolved}\n"
+            "╚══════════════════════════════════╝\n\n"
+            f"{home_report}\n\n"
+            f"{away_report}"
+        )
+        await update.message.reply_text(text, parse_mode="Markdown")
+
+    except Exception as e:
+        logger.exception("Error en /form %s", team_name)
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def markets_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /markets LOCAL vs VISITANTE
+    Show the full market model: AH, O/U, HT/FT, DNB, CS, team totals.
+    """
+    if not context.args or " vs " not in " ".join(context.args).lower():
+        await update.message.reply_text(
+            "❌ Uso: `/markets LOCAL vs VISITANTE`\n"
+            "Ejemplo: `/markets Real Madrid vs Barcelona`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw_text = " ".join(context.args)
+    home_raw, away_raw = raw_text.split(" vs ", 1)
+    home = home_raw.strip()
+    away = away_raw.strip()
+
+    await update.message.reply_text("⏳ Calculando modelos de mercado…")
+
+    try:
+        prediction = get_full_prediction(home, away)
+        from core.market_models import full_market_model, format_market_model
+        market = full_market_model(
+            prediction["xg_home"], prediction["xg_away"], prediction
+        )
+        text = format_market_model(prediction, market)
+        await update.message.reply_text(text, parse_mode="Markdown")
+
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}")
+    except Exception as e:
+        logger.exception("Error en /markets %s vs %s", home, away)
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def intel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /intel LOCAL vs VISITANTE
+    Show Game Intelligence: situational analysis, streaks, trap detection.
+    """
+    if not context.args or " vs " not in " ".join(context.args).lower():
+        await update.message.reply_text(
+            "❌ Uso: `/intel LOCAL vs VISITANTE`\n"
+            "Ejemplo: `/intel Barcelona vs Real Madrid`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw_text = " ".join(context.args)
+    home_raw, away_raw = raw_text.split(" vs ", 1)
+    home = home_raw.strip()
+    away = away_raw.strip()
+
+    await update.message.reply_text("⏳ Analizando inteligencia del partido…")
+
+    try:
+        prediction = get_full_prediction(home, away)
+
+        from sports.football import MATCH_HISTORY, H2H_DATA, resolve_team
+        home_r = resolve_team(home) or home
+        away_r = resolve_team(away) or away
+
+        home_history = MATCH_HISTORY.get(home_r, [])
+        away_history = MATCH_HISTORY.get(away_r, [])
+        h2h_records  = H2H_DATA.get((home_r, away_r), [])
+
+        from core.game_intelligence import analyze_game_intelligence, format_game_intelligence
+        intel = analyze_game_intelligence(prediction, home_history, away_history, h2h_records)
+        text  = format_game_intelligence(prediction, intel)
+        await update.message.reply_text(text, parse_mode="Markdown")
+
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}")
+    except Exception as e:
+        logger.exception("Error en /intel %s vs %s", home, away)
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
+# ===============================
+# 🔍 MARKET ERROR SCANNER COMMANDS
+# ===============================
+
+
+def _parse_scanodds_args(raw: str):
+    """
+    Parse the /scanodds and /addmarket argument string.
+
+    Accepted formats (pipe-separated):
+      EVENTO | MERCADO | cuota@casa...
+      DEPORTE | EVENTO | MERCADO | cuota@casa...
+      DEPORTE | EVENTO | MERCADO | JUGADOR | cuota@casa...
+
+    Returns (sport, event, market, player, odds_str) or raises ValueError.
+    """
+    parts = [p.strip() for p in raw.split("|")]
+    if len(parts) < 3:
+        raise ValueError(
+            "Formato incorrecto. Usa:\n"
+            "`EVENTO | MERCADO | cuota@casa cuota@casa...`\n"
+            "o: `DEPORTE | EVENTO | MERCADO | cuota@casa...`"
+        )
+
+    # Detect if last part contains "@" (odds tokens)
+    # Walk back from end to find where odds_str begins
+    odds_str = parts[-1]
+    if "@" not in odds_str:
+        raise ValueError("No se encontraron cuotas. Formato: `1.90@Bet365 2.50@Caliente`")
+
+    remaining = parts[:-1]
+
+    if len(remaining) == 2:
+        sport, event, market, player = "General", remaining[0], remaining[1], ""
+    elif len(remaining) == 3:
+        sport, event, market, player = remaining[0], remaining[1], remaining[2], ""
+    else:  # 4+
+        sport, event, market, player = remaining[0], remaining[1], remaining[2], remaining[3]
+
+    return sport, event, market, player, odds_str
+
+
+async def scanodds_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /scanodds EVENTO | MERCADO | cuota@casa cuota@casa...
+    /scanodds DEPORTE | EVENTO | MERCADO | cuota@casa...
+
+    Instantly scan for market errors in any sport/market. Also saves the
+    market to tracked list for future automatic scanning.
+
+    Examples:
+      /scanodds Real Madrid vs Barça | Victoria Madrid | 1.90@Bet365 2.50@Caliente 1.85@Codere
+      /scanodds NBA | Lakers vs Warriors | LeBron Pts +25.5 | 1.85@Betway 2.20@Caliente
+      /scanodds UFC | Jones vs Miocic | Jones Gana | 1.35@Bet365 1.60@Caliente 1.40@Betcris
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso:\n"
+            "`/scanodds EVENTO | MERCADO | cuota@casa cuota@casa...`\n\n"
+            "Ejemplos:\n"
+            "`/scanodds Madrid vs Barça | Victoria Madrid | 1.90@Bet365 2.50@Caliente 1.85@Codere`\n"
+            "`/scanodds NBA | Lakers vs Warriors | LeBron Pts +25.5 | 1.85@Betway 2.20@Caliente`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+
+    try:
+        sport, event, market, player, odds_str = _parse_scanodds_args(raw)
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}", parse_mode="Markdown")
+        return
+
+    from core.market_scanner import parse_odds_input, MarketScan, scan_market, format_alert, format_scan_summary
+    odds_list = parse_odds_input(odds_str)
+
+    if len(odds_list) < 2:
+        await update.message.reply_text(
+            "❌ Se necesitan al menos 2 cuotas de casas diferentes.\n"
+            "Formato: `1.90@Bet365 2.50@Caliente 1.85@Codere`",
+            parse_mode="Markdown",
+        )
+        return
+
+    scan   = MarketScan(sport=sport, event=event, market=market, player=player, odds_list=odds_list)
+    alerts = scan_market(scan)
+
+    # Auto-save to tracked markets
+    try:
+        from api.odds_feed import add_market
+        add_market(sport, event, market, odds_list, player)
+    except Exception as _e:
+        logger.debug("Could not save to tracked markets: %s", _e)
+
+    if not alerts:
+        player_str = f" ({player})" if player else ""
+        avg_str = f"{sum(b.odds for b in odds_list)/len(odds_list):.2f}" if odds_list else "?"
+        await update.message.reply_text(
+            f"✅ *Sin errores detectados*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📋 {event}{player_str} — {market}\n"
+            f"📉 Cuota promedio: `{avg_str}`\n"
+            f"_Todas las cuotas dentro del rango normal._\n\n"
+            f"💾 _Mercado guardado para seguimiento automático._",
+            parse_mode="Markdown",
+        )
+        return
+
+    # Send individual alert for each outlier found
+    for alert in alerts:
+        try:
+            await update.message.reply_text(format_alert(alert), parse_mode="Markdown")
+        except Exception:
+            await update.message.reply_text(format_alert(alert))
+
+    await update.message.reply_text(
+        f"💾 _Mercado guardado para seguimiento automático (c/15 min)._",
+        parse_mode="Markdown",
+    )
+
+
+async def scanner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /scanner [DEPORTE]
+    Scan all tracked markets for errors. Optionally filter by sport.
+    """
+    sport_filter = " ".join(context.args).strip().lower() if context.args else ""
+
+    await update.message.reply_text("🔍 Escaneando mercados…", parse_mode="Markdown")
+
+    try:
+        from api.odds_feed import get_tracked_markets, list_markets_text
+        from core.market_scanner import scan_multiple_markets, format_scan_summary
+
+        scans = get_tracked_markets()
+        if not scans:
+            await update.message.reply_text(
+                "📭 No hay mercados en seguimiento.\n\n"
+                "Usa `/scanodds EVENTO | MERCADO | cuota@casa...` para agregar uno.",
+                parse_mode="Markdown",
+            )
+            return
+
+        if sport_filter:
+            scans = [s for s in scans if sport_filter in s.sport.lower()]
+            if not scans:
+                await update.message.reply_text(
+                    f"📭 No hay mercados de *{sport_filter}* en seguimiento.",
+                    parse_mode="Markdown",
+                )
+                return
+
+        alerts = scan_multiple_markets(scans)
+        summary = format_scan_summary(alerts, scanned=len(scans))
+        await update.message.reply_text(summary, parse_mode="Markdown")
+
+        # Send individual alerts for errors + high value
+        critical = [a for a in alerts if a.classification in ("MARKET_ERROR", "HIGH_VALUE")]
+        for alert in critical[:5]:
+            from core.market_scanner import format_alert
+            try:
+                await update.message.reply_text(format_alert(alert), parse_mode="Markdown")
+            except Exception:
+                await update.message.reply_text(format_alert(alert))
+
+    except Exception as e:
+        logger.exception("Error en /scanner")
+        await update.message.reply_text(f"❌ Error al escanear: {e}")
+
+
+async def addmarket_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /addmarket DEPORTE | EVENTO | MERCADO | cuota@casa...
+
+    Add a market to the tracked list (no immediate scan).
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso:\n"
+            "`/addmarket DEPORTE | EVENTO | MERCADO | cuota@casa...`\n\n"
+            "Ejemplo:\n"
+            "`/addmarket Fútbol | Madrid vs PSG | Mbappé Tiros +1.5 | 1.80@Bet365 2.30@Caliente`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+    try:
+        sport, event, market, player, odds_str = _parse_scanodds_args(raw)
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}", parse_mode="Markdown")
+        return
+
+    from core.market_scanner import parse_odds_input
+    odds_list = parse_odds_input(odds_str)
+    if len(odds_list) < 2:
+        await update.message.reply_text(
+            "❌ Se necesitan al menos 2 cuotas.", parse_mode="Markdown"
+        )
+        return
+
+    try:
+        from api.odds_feed import add_market, market_count
+        add_market(sport, event, market, odds_list, player)
+        total = market_count()
+        player_str = f" ({player})" if player else ""
+        await update.message.reply_text(
+            f"✅ *Mercado agregado al seguimiento*\n"
+            f"  {sport} — {event}{player_str}\n"
+            f"  {market} | {len(odds_list)} casas\n\n"
+            f"📋 Total en seguimiento: `{total}`\n"
+            f"_Auto-escaneado cada 15 minutos._",
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        logger.exception("Error en /addmarket")
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def clearmarkets_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /clearmarkets
+    Remove all tracked markets.
+    """
+    try:
+        from api.odds_feed import clear_markets
+        count = clear_markets()
+        await update.message.reply_text(
+            f"🗑️ Se eliminaron `{count}` mercados del seguimiento.",
+            parse_mode="Markdown",
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def scanner_job(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Scheduled job (every 15 min): scan all tracked markets and send
+    HIGH_VALUE / MARKET_ERROR alerts to the alerts channel.
+    """
+    from core.config import ALERTS_CHANNEL_ID
+    channel_id = ALERTS_CHANNEL_ID
+    if not channel_id:
+        return
+
+    try:
+        from api.odds_feed import get_tracked_markets
+        from core.market_scanner import scan_multiple_markets, format_alert
+
+        scans = get_tracked_markets()
+        if not scans:
+            return
+
+        alerts = scan_multiple_markets(scans)
+        critical = [a for a in alerts if a.classification in ("MARKET_ERROR", "HIGH_VALUE")]
+
+        for alert in critical:
+            try:
+                await context.bot.send_message(
+                    chat_id=channel_id,
+                    text=format_alert(alert),
+                    parse_mode="Markdown",
+                )
+            except Exception as exc:
+                logger.warning("Scanner job: could not send alert: %s", exc)
+
+        if critical:
+            logger.info(
+                "Scanner job: sent %d critical alert(s) to channel %s",
+                len(critical), channel_id,
+            )
+    except Exception as exc:
+        logger.warning("Scanner job error: %s", exc)
+
+
 async def send_daily_alerts(context: ContextTypes.DEFAULT_TYPE):
     """Scheduled job: send high-confidence picks to alerts channel."""
     from core.config import ALERTS_CHANNEL_ID
@@ -1327,6 +1733,17 @@ def main():
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("parlay", parlay_command))
 
+    # ── Advanced analytics commands ──
+    app.add_handler(CommandHandler("form",    form_command))
+    app.add_handler(CommandHandler("markets", markets_command))
+    app.add_handler(CommandHandler("intel",   intel_command))
+
+    # ── Universal Market Error Scanner commands ──
+    app.add_handler(CommandHandler("scanodds",     scanodds_command))
+    app.add_handler(CommandHandler("scanner",      scanner_command))
+    app.add_handler(CommandHandler("addmarket",    addmarket_command))
+    app.add_handler(CommandHandler("clearmarkets", clearmarkets_command))
+
     # ── Multi-sport commands ──
     app.add_handler(CommandHandler("sports", sports_command))
     app.add_handler(CommandHandler("nba", nba))
@@ -1342,11 +1759,16 @@ def main():
 
     # ── Daily alerts scheduler (8 AM) ──
     from core.config import ALERTS_CHANNEL_ID
-    if ALERTS_CHANNEL_ID and app.job_queue:
-        from datetime import time as dt_time
-        alert_time = dt_time(hour=8, minute=0)
-        app.job_queue.run_daily(send_daily_alerts, time=alert_time)
-        logger.info("Daily alerts scheduled at 08:00 UTC → channel %s", ALERTS_CHANNEL_ID)
+    if app.job_queue:
+        if ALERTS_CHANNEL_ID:
+            from datetime import time as dt_time
+            alert_time = dt_time(hour=8, minute=0)
+            app.job_queue.run_daily(send_daily_alerts, time=alert_time)
+            logger.info("Daily alerts scheduled at 08:00 UTC → channel %s", ALERTS_CHANNEL_ID)
+
+        # ── Market Error Scanner (every 15 minutes) ──
+        app.job_queue.run_repeating(scanner_job, interval=900, first=120)
+        logger.info("Market Error Scanner scheduled every 15 min")
 
     logger.info("🤖 Bot corriendo — 5 deportes + datos en vivo (SofaScore/TheSportsDB/ESPN)…")
     app.run_polling()
