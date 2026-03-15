@@ -1,83 +1,289 @@
 """
-Parlay (Combinada) Generator.
+Parlay (Combinada) Generator — multi-sport edition.
 
-Builds reliable multi-leg parlays from the day's matches by:
-1. Running predictions for all today's matches
-2. Filtering to only ALTA/MEDIA confidence picks
-3. Selecting the best 2-5 legs with highest individual probabilities
-4. Computing combined probability and suggested stake
-5. Offering different risk tiers: SAFE (2 legs), BALANCED (3 legs), RISKY (4-5 legs)
+Builds reliable multi-leg parlays from the day's matches (Soccer, NBA, NFL, MLB)
+by:
+1. Running predictions for all today's matches across sports.
+2. Filtering to only ALTA confidence picks (configurable) above a minimum
+   probability threshold (default 75 %).
+3. Scoring each match for risk and excluding high-risk games.
+4. Selecting the best legs while enforcing market-type variety
+   (no more than _MAX_SAME_MARKET legs of the same type per parlay).
+5. Only one leg per match/event.
+6. Computing combined probability for three risk tiers:
+     SAFE (2 legs) · BALANCED (3 legs) · RISKY (4-5 legs).
 
-Each leg is a single market pick (1X2, Over/Under, BTTS).
+Each leg dict:
+  match, pick, prob, league, confidence, market_type, sport_emoji, risk_reasons
 """
+
+import math
 
 _CONFIDENCE_RANK = {"ALTA": 2, "MEDIA": 1, "BAJA": 0}
 
+# Maximum legs of the same market type allowed in a single parlay tier
+_MAX_SAME_MARKET = 2
+
+# Minimum win-probability spread between top side and 50 % to be considered
+# "non-balanced" enough for a moneyline parlay leg (top side must be >= this)
+_MIN_ML_PROB = 55.0
+
+# Risk thresholds
+_HIGH_RISK_SCORE = 0.5   # matches scoring >= this are excluded from parlays
+
+# Sport emoji lookup (matches the "sport" field pattern in prediction dicts)
+_SPORT_EMOJI = {
+    "nba": "🏀",
+    "nfl": "🏈",
+    "mlb": "⚾",
+    "soccer": "⚽",
+    "football": "⚽",
+}
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def _normal_cdf(x: float) -> float:
+    """Standard normal CDF via math.erf — no scipy required."""
+    return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
+
+
+def _sport_emoji(pred: dict) -> str:
+    """Return the appropriate sport emoji for a prediction dict."""
+    raw = str(pred.get("sport", "")).lower()
+    for key, emoji in _SPORT_EMOJI.items():
+        if key in raw:
+            return emoji
+    return "⚽"
+
+
+# ── Risk scoring ───────────────────────────────────────────────────────────────
+
+def score_risk(pred: dict) -> tuple:
+    """
+    Score the risk of a match prediction.
+
+    Returns
+    -------
+    (risk_score: float, reasons: list[str])
+      risk_score is in [0.0, 1.0].  A match is flagged as *high risk* when
+      risk_score >= _HIGH_RISK_SCORE (0.5).
+
+    Heuristics (cumulative):
+      - Win probabilities too balanced (top side < 55 %): +0.40
+      - Win probabilities somewhat balanced (top side < 60 %): +0.20
+      - Low confidence (BAJA): +0.40 | medium confidence (MEDIA): +0.15
+      - Sharp-game detected for soccer: +0.25
+      - No live stats available: +0.10
+      - Highest market probability < 65 %: +0.20
+    """
+    risk = 0.0
+    reasons: list = []
+
+    hw = pred.get("home_win", 0.0)
+    aw = pred.get("away_win", 0.0)
+    top_side = max(hw, aw)
+
+    if top_side < _MIN_ML_PROB:
+        risk += 0.40
+        reasons.append(f"Probs muy equilibradas ({top_side:.1f}%)")
+    elif top_side < 60.0:
+        risk += 0.20
+        reasons.append(f"Probs balanceadas ({top_side:.1f}%)")
+
+    conf = pred.get("confidence", "BAJA")
+    if conf == "BAJA":
+        risk += 0.40
+        reasons.append("Confianza BAJA")
+    elif conf == "MEDIA":
+        risk += 0.15
+        reasons.append("Confianza MEDIA")
+
+    # Sharp-game detection (soccer only)
+    sharp = pred.get("sharp", {})
+    if sharp and sharp.get("is_sharp"):
+        risk += 0.25
+        reasons.append("Sharp game detectado")
+
+    # Missing live stats → higher model uncertainty
+    if not pred.get("live_data", True):
+        risk += 0.10
+        reasons.append("Sin datos en vivo")
+
+    # No market with a strong probability
+    market_probs = [
+        pred.get("home_win", 0),
+        pred.get("away_win", 0),
+        pred.get("over_1_5", 0),
+        pred.get("over_2_5", 0),
+        pred.get("btts", 0),
+    ]
+    best_market = max(market_probs) if market_probs else 0
+    if best_market < 65.0:
+        risk += 0.20
+        reasons.append("Ningún mercado con prob > 65%")
+
+    return min(risk, 1.0), reasons
+
+
+# ── Candidate pick generation ──────────────────────────────────────────────────
+
+def _build_candidates(pred: dict) -> list:
+    """
+    Generate all valid candidate picks for a single match prediction.
+
+    Returns a list of dicts:
+      {"pick": str, "prob": float, "market_type": str}
+
+    Market types: "moneyline", "totals", "btts", "spread"
+
+    Sport coverage
+    --------------
+    Soccer : moneyline (home/draw/away), totals (Over 1.5/2.5/3.5), BTTS
+    NBA    : moneyline (home/away win)
+    NFL    : moneyline (home/away win)
+    MLB    : moneyline (home/away win), spread (run line cover probability)
+    """
+    candidates = []
+    sport_raw = str(pred.get("sport", "")).lower()
+    home = pred.get("home", "Local")
+    away = pred.get("away", "Visitante")
+
+    # ── Moneyline (all sports) ──────────────────────────────────────────────
+    hw = pred.get("home_win", 0.0)
+    aw = pred.get("away_win", 0.0)
+    if hw > 0:
+        candidates.append({"pick": f"Victoria {home}", "prob": hw, "market_type": "moneyline"})
+    if aw > 0:
+        candidates.append({"pick": f"Victoria {away}", "prob": aw, "market_type": "moneyline"})
+
+    # ── Soccer-specific markets ────────────────────────────────────────────
+    is_soccer = "nba" not in sport_raw and "nfl" not in sport_raw and "mlb" not in sport_raw
+    if is_soccer:
+        dr = pred.get("draw", 0.0)
+        o15 = pred.get("over_1_5", 0.0)
+        o25 = pred.get("over_2_5", 0.0)
+        o35 = pred.get("over_3_5", 0.0)
+        btts = pred.get("btts", 0.0)
+
+        if dr > 0:
+            candidates.append({"pick": "Empate", "prob": dr, "market_type": "moneyline"})
+        if o15 > 0:
+            candidates.append({"pick": "Over 1.5", "prob": o15, "market_type": "totals"})
+        if o25 > 0:
+            candidates.append({"pick": "Over 2.5", "prob": o25, "market_type": "totals"})
+        if o35 > 0:
+            candidates.append({"pick": "Over 3.5", "prob": o35, "market_type": "totals"})
+        if btts > 0:
+            candidates.append({"pick": "Ambos Marcan (BTTS)", "prob": btts, "market_type": "btts"})
+
+    # ── MLB run line ───────────────────────────────────────────────────────
+    if "mlb" in sport_raw:
+        run_line = pred.get("run_line", {})
+        if run_line:
+            cov = run_line.get("cover_prob", 0.0)
+            fav = run_line.get("fav_side", "")
+            if cov > 0:
+                label = f"{home} -1.5" if fav == "home" else f"{away} -1.5"
+                candidates.append({"pick": label, "prob": cov, "market_type": "spread"})
+
+    return candidates
+
+
+# ── Main leg generation ────────────────────────────────────────────────────────
 
 def generate_parlay_legs(
     predictions: list,
     max_legs: int = 5,
-    min_confidence: str = "MEDIA",
+    min_confidence: str = "ALTA",
+    min_prob: float = 75.0,
 ) -> list:
     """
-    Generate individual parlay legs from a list of predictions.
+    Generate individual parlay legs from a list of multi-sport predictions.
 
     Parameters
     ----------
-    predictions     : list of prediction dicts from predict_match()
-    max_legs        : maximum number of legs to return
-    min_confidence  : minimum confidence level to include ("ALTA" or "MEDIA")
+    predictions    : list of prediction dicts (soccer, NBA, NFL, or MLB).
+    max_legs       : maximum number of legs to return.
+    min_confidence : minimum confidence level to include ("ALTA" or "MEDIA").
+    min_prob       : minimum individual pick probability (%) to include.
 
     Returns
     -------
-    list of dicts, each: {
-        "match": str,
-        "pick": str,
-        "prob": float,
-        "league": str,
-        "confidence": str,
-    }
-    Sorted by prob descending, limited to max_legs.
+    list of dicts, each:
+      {
+        "match"       : str,
+        "pick"        : str,
+        "prob"        : float,
+        "league"      : str,
+        "confidence"  : str,
+        "market_type" : str,
+        "sport_emoji" : str,
+        "risk_reasons": list[str],
+      }
+    Sorted by prob descending, limited to max_legs, with market-variety
+    constraints applied.
     """
-    min_rank = _CONFIDENCE_RANK.get(min_confidence, 1)
-    legs = []
+    min_rank = _CONFIDENCE_RANK.get(min_confidence, 2)
+
+    # ── Step 1: Filter, score risk, pick best candidate per match ─────────
+    pool = []
 
     for pred in predictions:
         conf = pred.get("confidence", "BAJA")
         if _CONFIDENCE_RANK.get(conf, 0) < min_rank:
             continue
 
+        risk_score, risk_reasons = score_risk(pred)
+        if risk_score >= _HIGH_RISK_SCORE:
+            continue
+
         home = pred.get("home", "Local")
         away = pred.get("away", "Visitante")
         league = pred.get("league", "")
+        emoji = _sport_emoji(pred)
         match_str = f"{home} vs {away}"
 
-        # Collect candidate picks with their probabilities
-        candidates = [
-            (f"Victoria {home}", pred.get("home_win", 0)),
-            (f"Victoria {away}", pred.get("away_win", 0)),
-            (f"Over 1.5", pred.get("over_1_5", 0)),
-            (f"Over 2.5", pred.get("over_2_5", 0)),
-            (f"Ambos Marcan (BTTS)", pred.get("btts", 0)),
-        ]
-
-        # Pick the single strongest market with prob >= 55%
-        best_pick, best_prob = max(candidates, key=lambda x: x[1])
-        if best_prob < 55:
+        candidates = _build_candidates(pred)
+        valid = [c for c in candidates if c["prob"] >= min_prob]
+        if not valid:
             continue
 
-        legs.append({
-            "match": match_str,
-            "pick": best_pick,
-            "prob": round(best_prob, 1),
-            "league": league,
-            "confidence": conf,
+        # Best pick per match = highest probability among valid candidates
+        best = max(valid, key=lambda x: x["prob"])
+
+        pool.append({
+            "match":        match_str,
+            "pick":         best["pick"],
+            "prob":         round(best["prob"], 1),
+            "league":       league,
+            "confidence":   conf,
+            "market_type":  best["market_type"],
+            "sport_emoji":  emoji,
+            "risk_reasons": risk_reasons,
         })
 
-    # Sort by probability descending, take top max_legs
-    legs.sort(key=lambda x: x["prob"], reverse=True)
-    return legs[:max_legs]
+    # ── Step 2: Sort by probability descending ────────────────────────────
+    pool.sort(key=lambda x: x["prob"], reverse=True)
 
+    # ── Step 3: Apply variety constraints ─────────────────────────────────
+    # Allow at most _MAX_SAME_MARKET legs of the same market type.
+    selected: list = []
+    market_counts: dict = {}
+
+    for leg in pool:
+        if len(selected) >= max_legs:
+            break
+        mtype = leg["market_type"]
+        if market_counts.get(mtype, 0) >= _MAX_SAME_MARKET:
+            continue
+        market_counts[mtype] = market_counts.get(mtype, 0) + 1
+        selected.append(leg)
+
+    return selected
+
+
+# ── Parlay tiers ───────────────────────────────────────────────────────────────
 
 def build_parlays(legs: list) -> dict:
     """
@@ -134,11 +340,14 @@ def build_parlays(legs: list) -> dict:
     return result
 
 
-def format_parlay(parlays: dict) -> str:
+# ── Telegram formatter ─────────────────────────────────────────────────────────
+
+def format_parlay(parlays: dict, filtered_count: int = 0) -> str:
     """
     Format the parlay output for Telegram.
 
     Returns Markdown-compatible string with box-style layout.
+    Includes sport emoji and market type in each leg.
     """
     lines = [
         "╔══════════════════════════════════╗",
@@ -148,14 +357,14 @@ def format_parlay(parlays: dict) -> str:
     ]
 
     tiers = [
-        ("safe",     "🟢", "SEGURA",      "2 patas"),
-        ("balanced", "🟡", "BALANCEADA",  "3 patas"),
-        ("risky",    "🔴", "ARRIESGADA",  "4+ patas"),
+        ("safe",     "🟢", "SEGURA",     "2 patas"),
+        ("balanced", "🟡", "BALANCEADA", "3 patas"),
+        ("risky",    "🔴", "ARRIESGADA", "4+ patas"),
     ]
 
     _numbers = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
 
-    for key, emoji, label, patas in tiers:
+    for key, emoji, label, _patas in tiers:
         tier = parlays.get(key)
         if not tier:
             continue
@@ -165,15 +374,23 @@ def format_parlay(parlays: dict) -> str:
         lines.append(f"{emoji} *{label}* ({n_patas} patas)")
         lines.append("━━━━━━━━━━━━━━━━━━━━")
         for i, leg in enumerate(tier_legs):
-            num = _numbers[i] if i < len(_numbers) else f"{i+1}."
+            num = _numbers[i] if i < len(_numbers) else f"{i + 1}."
+            sport_e = leg.get("sport_emoji", "")
+            prefix = f"{sport_e} " if sport_e else ""
             lines.append(
-                f"  {num} {leg['match']} → {leg['pick']} ({leg['prob']}%)"
+                f"  {num} {prefix}{leg['match']} → {leg['pick']} ({leg['prob']}%)"
             )
         lines.append(f"📊 Prob. combinada: *{tier['combined_prob']}%*")
         lines.append("")
 
     if not any(parlays.get(k) for k in ("safe", "balanced", "risky")):
         lines.append("⚠️ No hay suficientes picks confiables para armar parlay hoy.")
+        lines.append("")
+
+    if filtered_count > 0:
+        lines.append(
+            f"🔍 _{filtered_count} partido(s) excluido(s) por alto riesgo o baja confianza._"
+        )
         lines.append("")
 
     lines.append("⚠️ _Las parlays son recreativas. Apuesta responsablemente._")
