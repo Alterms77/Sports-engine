@@ -38,6 +38,10 @@ _ALIASES: dict = {
     "chicago cubs": "Chicago Cubs",
     "white sox": "Chicago White Sox",
     "chicago white sox": "Chicago White Sox",
+    "cws": "Chicago White Sox",
+    "chi white sox": "Chicago White Sox",
+    "chicago sox": "Chicago White Sox",
+    "chi sox": "Chicago White Sox",
     "giants": "San Francisco Giants",
     "san francisco": "San Francisco Giants",
     "sf giants": "San Francisco Giants",
@@ -82,7 +86,6 @@ _ALIASES: dict = {
     "indians": "Cleveland Guardians",
     "guardians": "Cleveland Guardians",
     "cleveland": "Cleveland Guardians",
-    "white sox": "Chicago White Sox",
     "rangers": "Texas Rangers",
     "texas": "Texas Rangers",
     "angels": "Los Angeles Angels",
@@ -107,6 +110,8 @@ _ALIASES: dict = {
 
 def resolve_team(name: str) -> Optional[str]:
     key = name.strip().lower()
+    if not key:
+        return None
     if key in _ALIASES:
         return _ALIASES[key]
     for alias, canonical in _ALIASES.items():

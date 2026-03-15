@@ -41,9 +41,13 @@ def update_matches():
 
         params = {"date": date}
 
-        r = requests.get(url, headers=headers, params=params)
-
-        data = r.json()
+        try:
+            r = requests.get(url, headers=headers, params=params, timeout=10)
+            r.raise_for_status()
+            data = r.json()
+        except requests.exceptions.RequestException as exc:
+            logger.warning("API-Sports request failed for date %s: %s", date, exc)
+            continue
 
         for m in data.get("response", []):
 

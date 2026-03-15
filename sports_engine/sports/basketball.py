@@ -113,6 +113,8 @@ def _normal_cdf(x: float) -> float:
 def resolve_team(name: str) -> Optional[str]:
     """Return canonical NBA team name, or None if not recognised."""
     key = name.strip().lower()
+    if not key:
+        return None
     if key in _ALIASES:
         return _ALIASES[key]
     # Partial match

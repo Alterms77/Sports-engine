@@ -113,6 +113,8 @@ def _normal_cdf(x: float) -> float:
 
 def resolve_team(name: str) -> Optional[str]:
     key = name.strip().lower()
+    if not key:
+        return None
     if key in _ALIASES:
         return _ALIASES[key]
     for alias, canonical in _ALIASES.items():

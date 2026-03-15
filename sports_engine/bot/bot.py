@@ -2,6 +2,8 @@ import os
 import sys
 import csv
 import logging
+import threading
+import time as _time
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -65,9 +67,31 @@ logger = logging.getLogger(__name__)
 
 DATA_PATH = os.path.join(_SPORTS_ENGINE_DIR, "data", "today_matches.csv")
 
-# ===============================
-# 🧠 FUNCIONES AUXILIARES
-# ===============================
+# TTL (seconds) between automatic CSV refreshes for /today
+MATCHES_UPDATE_TTL = 900  # 15 minutes
+
+# State for CSV refresh scheduling
+_matches_lock = threading.Lock()
+_last_csv_update: float = 0.0  # epoch seconds of last successful update
+
+
+def _refresh_matches_if_stale() -> None:
+    """Refresh the football CSV if the TTL has expired. Thread-safe, non-blocking."""
+    global _last_csv_update
+    now = _time.time()
+    if now - _last_csv_update < MATCHES_UPDATE_TTL:
+        return
+    if not _matches_lock.acquire(blocking=False):
+        # Another thread is already refreshing; skip silently
+        return
+    try:
+        update_matches()
+        _last_csv_update = _time.time()
+    except Exception as exc:
+        logger.warning("No se pudieron actualizar los partidos: %s", exc)
+    finally:
+        _matches_lock.release()
+
 
 
 def load_today_matches():
@@ -340,7 +364,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💡 *Mercados & Dinero inteligente*\n"
         "  `/consensus` · `/steam` · `/liquidity`\n"
         "  `/portfolio` · `/rl`\n\n"
-        "🔍 *Market Error Scanner (universal)*\n"
+        "🤖 *Auto-Scanner (24/7 automático)*\n"
+        "  Detecta arbitraje, errores de cuota, value bets y steam moves\n"
+        "  sin intervención manual. Alertas automáticas al canal.\n"
+        "  `/autoscan` — ver estado del scanner\n\n"
+        "🔍 *Scanner manual*\n"
         "  `/scanodds EVENTO | MERCADO | cuota@casa...`\n"
         "  `/scanner` · `/addmarket` · `/clearmarkets`\n\n"
         "📡 *Datos en vivo (SofaScore / TheSportsDB / ESPN)*\n"
@@ -446,6 +474,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show today's football matches (local CSV) + live ESPN schedule for all sports."""
+    # ── Refresh CSV if stale (TTL = 15 min), non-blocking ──
+    _refresh_matches_if_stale()
+
     # ── Local football matches ──
     football_matches = load_today_matches()
 
@@ -456,6 +487,10 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for m in football_matches:
             league = f" _{m['league']}_" if m["league"] else ""
             text += f"  • {m['home']} vs {m['away']}{league}\n"
+        # Show last update timestamp for the CSV
+        if _last_csv_update:
+            ts = datetime.fromtimestamp(_last_csv_update).strftime("%H:%M")
+            text += f"_Actualizado: {ts}_\n"
         text += "\n"
 
     # ── ESPN multi-sport schedule ──
@@ -2296,10 +2331,43 @@ async def rl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error: {e}")
 
 
+async def autoscan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /autoscan — Show the auto-scanner status and configuration.
+
+    Displays whether ODDS_API_KEY is configured, scan interval, EV threshold,
+    remaining Odds API quota, and dedup cache size.
+    """
+    try:
+        from core.auto_scanner import status_summary
+        await update.message.reply_text(status_summary(), parse_mode="Markdown")
+    except Exception as exc:
+        logger.exception("Error en /autoscan")
+        await update.message.reply_text(f"❌ Error: {exc}")
+
+
+async def matches_update_job(context: ContextTypes.DEFAULT_TYPE):
+    """Scheduled job (every 15 min): refresh today_matches.csv from API-Sports."""
+    global _last_csv_update
+    if not _matches_lock.acquire(blocking=False):
+        logger.debug("matches_update_job: skipped (another refresh in progress)")
+        return
+    try:
+        update_matches()
+        _last_csv_update = _time.time()
+        logger.info("matches_update_job: CSV actualizado")
+    except Exception as exc:
+        logger.warning("matches_update_job: error al actualizar partidos: %s", exc)
+    finally:
+        _matches_lock.release()
+
+
 async def scanner_job(context: ContextTypes.DEFAULT_TYPE):
     """
-    Scheduled job (every 15 min): scan all tracked markets and send
+    Scheduled job (every 15 min): scan manually-tracked markets and send
     HIGH_VALUE / MARKET_ERROR alerts to the alerts channel.
+    This job handles markets added via /addmarket.  Automatic scanning of
+    all live events is handled by auto_scan_job.
     """
     from core.config import ALERTS_CHANNEL_ID
     channel_id = ALERTS_CHANNEL_ID
@@ -2334,6 +2402,43 @@ async def scanner_job(context: ContextTypes.DEFAULT_TYPE):
             )
     except Exception as exc:
         logger.warning("Scanner job error: %s", exc)
+
+
+async def auto_scan_job(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Fully automatic background scanning job.
+
+    Runs every AUTO_SCAN_INTERVAL seconds (default 300 s / 5 min).
+    Fetches live bookmaker odds from The Odds API, detects arbitrage,
+    market errors, value bets, and steam moves, then sends alerts to
+    the ALERTS_CHANNEL_ID without any manual input.
+    """
+    from core.config import ALERTS_CHANNEL_ID
+    channel_id = ALERTS_CHANNEL_ID
+    if not channel_id:
+        logger.debug("auto_scan_job: ALERTS_CHANNEL_ID not set, skipping")
+        return
+
+    try:
+        from core.auto_scanner import scan_once
+        alerts = await scan_once()
+        for alert in alerts:
+            try:
+                await context.bot.send_message(
+                    chat_id=channel_id,
+                    text=alert.message,
+                    parse_mode="Markdown",
+                )
+            except Exception as exc:
+                logger.warning("auto_scan_job: could not send alert: %s", exc)
+
+        if alerts:
+            logger.info(
+                "auto_scan_job: dispatched %d alert(s) to channel %s",
+                len(alerts), channel_id,
+            )
+    except Exception as exc:
+        logger.warning("auto_scan_job error: %s", exc)
 
 
 async def send_daily_alerts(context: ContextTypes.DEFAULT_TYPE):
@@ -2378,6 +2483,7 @@ async def send_daily_alerts(context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    global _last_csv_update
     logger.info("🚀 Iniciando Sports Engine Bot…")
 
     validate_config()
@@ -2386,9 +2492,10 @@ def main():
         logger.error("TOKEN no está configurado. Saliendo.")
         sys.exit(1)
 
-    # Update today's matches (best-effort)
+    # Update today's matches (best-effort); record timestamp on success
     try:
         update_matches()
+        _last_csv_update = _time.time()
     except Exception as e:
         logger.warning("No se pudieron actualizar los partidos: %s", e)
 
@@ -2426,6 +2533,7 @@ def main():
     app.add_handler(CommandHandler("scanner",      scanner_command))
     app.add_handler(CommandHandler("addmarket",    addmarket_command))
     app.add_handler(CommandHandler("clearmarkets", clearmarkets_command))
+    app.add_handler(CommandHandler("autoscan",     autoscan_command))
 
     # ── Multi-sport commands ──
     app.add_handler(CommandHandler("sports", sports_command))
@@ -2449,9 +2557,21 @@ def main():
             app.job_queue.run_daily(send_daily_alerts, time=alert_time)
             logger.info("Daily alerts scheduled at 08:00 UTC → channel %s", ALERTS_CHANNEL_ID)
 
-        # ── Market Error Scanner (every 15 minutes) ──
+        # ── Market Error Scanner (manually-tracked markets, every 15 min) ──
         app.job_queue.run_repeating(scanner_job, interval=900, first=120)
         logger.info("Market Error Scanner scheduled every 15 min")
+
+        # ── Auto-Scanner (fully automatic, every AUTO_SCAN_INTERVAL seconds) ──
+        from core.config import AUTO_SCAN_INTERVAL
+        app.job_queue.run_repeating(auto_scan_job, interval=AUTO_SCAN_INTERVAL, first=60)
+        logger.info("Auto-Scanner scheduled every %d s", AUTO_SCAN_INTERVAL)
+
+        # ── Football CSV refresh (every 15 minutes) ──
+        # first=MATCHES_UPDATE_TTL: the initial update already ran at bot startup,
+        # so schedule the first background refresh one full TTL later to avoid
+        # a redundant API call immediately after boot.
+        app.job_queue.run_repeating(matches_update_job, interval=MATCHES_UPDATE_TTL, first=MATCHES_UPDATE_TTL)
+        logger.info("Football matches CSV refresh scheduled every %d s", MATCHES_UPDATE_TTL)
 
     logger.info("🤖 Bot corriendo — 5 deportes + datos en vivo (SofaScore/TheSportsDB/ESPN)…")
     app.run_polling()
