@@ -334,20 +334,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎾 Tenis: `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
         "🎰 Parlays: `/parlay` — parlays confiables del día\n\n"
         "🔬 *Analytics avanzados*\n"
-        "  `/form EQUIPO` — form engine profundo\n"
-        "  `/intel LOCAL vs VISITANTE` — game intelligence\n"
-        "  `/markets LOCAL vs VISITANTE` — modelos de mercado\n\n"
+        "  `/form EQUIPO` · `/intel L vs V` · `/markets L vs V`\n"
+        "  `/bayes L vs V` · `/referee ÁRBITRO` · `/weather`\n"
+        "  `/player EQUIPO STATUS` · `/clv` · `/risk`\n\n"
+        "💡 *Mercados & Dinero inteligente*\n"
+        "  `/consensus` · `/steam` · `/liquidity`\n"
+        "  `/portfolio` · `/rl`\n\n"
         "🔍 *Market Error Scanner (universal)*\n"
         "  `/scanodds EVENTO | MERCADO | cuota@casa...`\n"
-        "  `/scanner` — escanear mercados en seguimiento\n"
-        "  `/addmarket DEPORTE | EVENTO | MERCADO | cuota@casa...`\n\n"
+        "  `/scanner` · `/addmarket` · `/clearmarkets`\n\n"
         "📡 *Datos en vivo (SofaScore / TheSportsDB / ESPN)*\n"
-        "  `/live [deporte]` — marcadores en vivo\n"
-        "  `/scores [deporte]` — partidos de hoy\n"
-        "  `/liveteam EQUIPO` — forma + próximos partidos\n"
-        "  `/tabla LIGA` — clasificación\n\n"
-        "📅 `/today` — todos los partidos de hoy\n"
-        "🏟️ `/sports` — ver todos los comandos\n"
+        "  `/live [deporte]` · `/scores` · `/liveteam EQUIPO` · `/tabla LIGA`\n\n"
+        "📅 `/today` — partidos de hoy\n"
         "❓ `/help` — ayuda detallada",
         parse_mode="Markdown",
     )
@@ -397,6 +395,38 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  🔥 High Value         ≥30% sobre promedio\n"
         "  🚨 Market Error       ≥40% sobre promedio\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
+        "🧠 *INTELIGENCIA AVANZADA*\n"
+        "🔹 `/liquidity EVENTO | MERCADO | cuota@casa...`\n"
+        "  Analiza profundidad de mercado y line shopping.\n\n"
+        "🔹 `/steam EVENTO | MERCADO | abierta@casa actual@casa...`\n"
+        "  Detecta movimientos de dinero sharp (Steam moves).\n"
+        "  _Ej:_ `/steam Madrid vs Barça | Victoria Madrid | 2.10@B365:1.82 2.05@Cal:1.80`\n\n"
+        "🔹 `/consensus EVENTO | Casa1:H/D/A Casa2:H/D/A...`\n"
+        "  Modelo de consenso de mercado sin margen (precio justo).\n\n"
+        "🔹 `/clv [log | update EVENTO MERCADO CIERRE]`\n"
+        "  Tracker de Closing Line Value. Registra y analiza tus picks.\n\n"
+        "🔹 `/risk PROB CUOTA [BANKROLL]`\n"
+        "  Gestión de riesgo: Kelly, EV, riesgo de ruina.\n"
+        "  _Ej:_ `/risk 0.58 1.85 1000`\n\n"
+        "🔹 `/player EQUIPO | Jugador1:status Jugador2:status`\n"
+        "  Impacto de jugadores en xG (bajas, dudas, retornos).\n"
+        "  Status: absent · doubt · returning · available\n"
+        "  _Ej:_ `/player Man City | Haaland:absent DeBruyne:doubt`\n\n"
+        "🔹 `/referee ÁRBITRO vs PARTIDO`\n"
+        "  Perfil del árbitro: tarjetas, penaltis, estilo.\n"
+        "  _Ej:_ `/referee Jesus Gil Manzano`\n\n"
+        "🔹 `/weather CONDICIÓN TEMP VIENTO LLUVIA CESPED`\n"
+        "  Impacto del clima en xG, córners y tarjetas.\n"
+        "  _Ej:_ `/weather lluvia 8 45 5 wet`\n\n"
+        "🔹 `/portfolio PROB1:CUOTA1:DEPORTE:MERCADO PROB2:CUOTA2:...`\n"
+        "  Optimizador de portfolio: stakes Kelly óptimos.\n"
+        "  _Ej:_ `/portfolio 0.58:1.85:Fútbol:HomeWin 0.61:1.72:NBA:Over`\n\n"
+        "🔹 `/bayes LOCAL vs VISITANTE [opciones]`\n"
+        "  Actualización bayesiana de probabilidades con evidencia.\n\n"
+        "🔹 `/rl CONFIANZA EV DRAWDOWN [BANKROLL]`\n"
+        "  Estrategia RL (Q-Learning): stake recomendado por el agente.\n"
+        "  _Ej:_ `/rl ALTA 5.2 3.0 1000`\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
         "📡 *DATOS EN VIVO* _(SofaScore / TheSportsDB / ESPN)_\n"
         "🔹 `/live [deporte]` | `/scores [deporte]`\n"
         "🔹 `/liveteam EQUIPO` | `/tabla LIGA`\n\n"
@@ -405,8 +435,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎾 `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "*Confianza:* 🟢 ALTA ≥55% | 🟡 MEDIA ≥42% | 🔴 BAJA\n"
-        "_Motor: Home/Away Split + Dixon-Coles + MC + Decay Form + H2H + Elo_\n"
-        "_Métricas: xThreat · PPDA · Field Tilt · Sharp · AH · HT/FT_\n"
+        "_Motor: Poisson + Dixon-Coles + MC + Elo + Decay Form + H2H_\n"
+        "_Módulos: xThreat · PPDA · FieldTilt · Sharp · CLV · Steam_\n"
+        "_Módulos: Liquidity · Consensus · Player · Referee · Weather_\n"
+        "_Módulos: Portfolio · Bayes · RL · AH · HT/FT · Parlay_\n"
         "_Fuentes: SofaScore · TheSportsDB · ESPN_",
         parse_mode="Markdown",
     )
@@ -1626,6 +1658,644 @@ async def clearmarkets_command(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(f"❌ Error: {e}")
 
 
+
+# ===============================
+# 🧠 INTELLIGENCE COMMANDS
+# ===============================
+
+
+async def liquidity_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /liquidity EVENTO | MERCADO | cuota@casa cuota@casa...
+
+    Assess betting market liquidity and identify line shopping opportunities.
+
+    Example:
+      /liquidity Madrid vs Barça | Victoria Madrid | 1.90@Bet365 2.10@Caliente 1.88@Codere
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso:\n`/liquidity EVENTO | MERCADO | cuota@casa...`\n\n"
+            "Ejemplo:\n`/liquidity Madrid vs Barça | Victoria Madrid | 1.90@Bet365 2.10@Caliente 1.88@Codere`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+    try:
+        from core.market_scanner import parse_odds_input
+        # Parse: EVENTO | MERCADO | cuotas
+        parts = [p.strip() for p in raw.split("|")]
+        if len(parts) < 3:
+            raise ValueError("Necesitas al menos: EVENTO | MERCADO | cuotas")
+        event, market, odds_str = parts[0], parts[1], parts[-1]
+
+        odds_raw = parse_odds_input(odds_str)
+        if len(odds_raw) < 2:
+            raise ValueError("Se necesitan al menos 2 casas de apuestas")
+
+        from core.liquidity_detector import BookmakerLine, assess_market_liquidity, format_liquidity_report
+        lines = [BookmakerLine(b.bookmaker, b.odds) for b in odds_raw]
+        report = assess_market_liquidity(market, lines)
+        text   = format_liquidity_report({market: report}, event=event)
+        await update.message.reply_text(text, parse_mode="Markdown")
+
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}", parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error en /liquidity")
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def steam_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /steam EVENTO | MERCADO | ABIERTA@CASA:ACTUAL ABIERTA@CASA:ACTUAL...
+
+    Detect steam moves (sharp money) from opening vs current odds.
+
+    Format: open_odds@bookmaker:current_odds
+    Example:
+      /steam Madrid vs Barça | Victoria Madrid | 2.10@Bet365:1.82 2.05@Caliente:1.80 2.12@Codere:1.84
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso:\n"
+            "`/steam EVENTO | MERCADO | abierta@casa:actual abierta@casa:actual`\n\n"
+            "Ejemplo:\n"
+            "`/steam Madrid vs Barça | Victoria Madrid | 2.10@Bet365:1.82 2.05@Caliente:1.80`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+    try:
+        parts = [p.strip() for p in raw.split("|")]
+        if len(parts) < 3:
+            raise ValueError("Formato: EVENTO | MERCADO | abierta@casa:actual ...")
+        event, market, snap_str = parts[0], parts[1], parts[-1]
+
+        from core.steam_detector import OddsSnapshot, detect_steam, format_steam_alert, format_steam_summary
+        snapshots = []
+        for token in snap_str.strip().split():
+            if "@" not in token or ":" not in token:
+                continue
+            left, current_str = token.rsplit(":", 1)
+            open_str, bookie  = left.split("@", 1)
+            try:
+                snapshots.append(OddsSnapshot(bookie, float(open_str), float(current_str)))
+            except ValueError:
+                continue
+
+        if len(snapshots) < 2:
+            raise ValueError("Se necesitan al menos 2 casas con movimiento de cuota")
+
+        alert = detect_steam(market, snapshots, event=event, sport="General")
+        if alert:
+            await update.message.reply_text(format_steam_alert(alert), parse_mode="Markdown")
+        else:
+            await update.message.reply_text(
+                f"✅ *Sin steam detectado*\n"
+                f"  {event} — {market}\n"
+                f"_El movimiento no supera el umbral mínimo de steam._",
+                parse_mode="Markdown",
+            )
+
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}", parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error en /steam")
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def consensus_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /consensus EVENTO | H:D:A@Casa1 H:D:A@Casa2 ...
+
+    Build market consensus from multiple bookmakers' 1X2 odds.
+
+    Example:
+      /consensus Madrid vs Barça | 1.85:3.50:4.20@Bet365 1.90:3.40:4.10@Caliente 1.87:3.45:4.15@Codere
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso:\n`/consensus EVENTO | H:D:A@Casa H:D:A@Casa...`\n\n"
+            "Ejemplo:\n`/consensus Madrid vs Barça | 1.85:3.50:4.20@Bet365 1.90:3.40:4.10@Caliente`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+    try:
+        parts = [p.strip() for p in raw.split("|")]
+        if len(parts) < 2:
+            raise ValueError("Formato: EVENTO | H:D:A@Casa1 H:D:A@Casa2...")
+        event, odds_str = parts[0], parts[1]
+
+        from core.market_consensus import BookOdds, build_consensus, format_consensus
+        books = []
+        for token in odds_str.strip().split():
+            if "@" not in token or ":" not in token:
+                continue
+            odds_part, bookie = token.rsplit("@", 1)
+            try:
+                odds = [float(x) for x in odds_part.split(":")]
+                if len(odds) >= 2:
+                    books.append(BookOdds(bookie, odds))
+            except ValueError:
+                continue
+
+        if len(books) < 2:
+            raise ValueError("Se necesitan al menos 2 casas de apuestas (H:D:A@Casa)")
+
+        n_outcomes = len(books[0].odds)
+        if n_outcomes == 3:
+            labels = ["Local", "Empate", "Visitante"]
+        elif n_outcomes == 2:
+            labels = ["Local", "Visitante"]
+        else:
+            labels = [f"Resultado {i+1}" for i in range(n_outcomes)]
+
+        result = build_consensus(books, labels)
+        text   = format_consensus(result, event=event)
+        await update.message.reply_text(text, parse_mode="Markdown")
+
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}", parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error en /consensus")
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def clv_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /clv                              — Show CLV statistics
+    /clv log EVENTO | MERCADO | CUOTA — Log a new pick (no closing odds yet)
+    /clv update EVENTO | MERCADO | CIERRE — Update closing odds for a pick
+    /clv log EVENTO | MERCADO | CUOTA | CIERRE — Log pick with immediate closing
+
+    Example:
+      /clv log Madrid vs Barça | Victoria Madrid | 1.92
+      /clv update Madrid vs Barça | Victoria Madrid | 1.80
+      /clv log Lakers vs Warriors | LeBron Pts +25.5 | 1.85 | 1.75
+    """
+    from core.clv_tracker import log_pick, update_closing_odds, get_clv_stats, format_clv_stats, format_clv_single
+
+    if not context.args:
+        stats = get_clv_stats()
+        await update.message.reply_text(format_clv_stats(stats), parse_mode="Markdown")
+        return
+
+    sub = context.args[0].lower()
+    rest = " ".join(context.args[1:])
+
+    if sub in ("log", "registrar"):
+        parts = [p.strip() for p in rest.split("|")]
+        if len(parts) < 3:
+            await update.message.reply_text(
+                "❌ Uso: `/clv log EVENTO | MERCADO | CUOTA [| CIERRE]`",
+                parse_mode="Markdown",
+            )
+            return
+        try:
+            event   = parts[0]
+            market  = parts[1]
+            bet_o   = float(parts[2])
+            close_o = float(parts[3]) if len(parts) >= 4 else None
+            entry   = log_pick(event, market, bet_o, close_o)
+            await update.message.reply_text(format_clv_single(entry), parse_mode="Markdown")
+        except (ValueError, IndexError):
+            await update.message.reply_text("❌ Error: cuota inválida.", parse_mode="Markdown")
+
+    elif sub in ("update", "cierre"):
+        parts = [p.strip() for p in rest.split("|")]
+        if len(parts) < 3:
+            await update.message.reply_text(
+                "❌ Uso: `/clv update EVENTO | MERCADO | CUOTA_CIERRE`",
+                parse_mode="Markdown",
+            )
+            return
+        try:
+            found = update_closing_odds(parts[0], parts[1], float(parts[2]))
+            if found:
+                await update.message.reply_text(
+                    f"✅ CLV actualizado: `{parts[0]}` / {parts[1]}\n  Cuota cierre: `{parts[2]}`",
+                    parse_mode="Markdown",
+                )
+            else:
+                await update.message.reply_text("⚠️ Pick no encontrado para actualizar.")
+        except (ValueError, IndexError):
+            await update.message.reply_text("❌ Error: cuota inválida.", parse_mode="Markdown")
+
+    else:
+        stats = get_clv_stats()
+        await update.message.reply_text(format_clv_stats(stats), parse_mode="Markdown")
+
+
+async def risk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /risk PROB CUOTA [BANKROLL]
+
+    Calculate optimal stake using Kelly Criterion + Risk of Ruin.
+
+    Example:
+      /risk 0.58 1.85 1000
+      /risk 58 1.85           (probability as %)
+    """
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "❌ Uso: `/risk PROB CUOTA [BANKROLL]`\n\n"
+            "Ejemplo: `/risk 0.58 1.85 1000`",
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        prob_raw  = float(context.args[0])
+        prob      = prob_raw / 100 if prob_raw > 1 else prob_raw
+        odds      = float(context.args[1])
+        bankroll  = float(context.args[2]) if len(context.args) >= 3 else 1000.0
+        market    = " ".join(context.args[3:]) if len(context.args) > 3 else ""
+
+        from core.risk_management import format_stake_advice
+        text = format_stake_advice(bankroll, prob, odds, market)
+        await update.message.reply_text(text, parse_mode="Markdown")
+
+    except (ValueError, IndexError):
+        await update.message.reply_text("❌ Valores inválidos. Ej: `/risk 0.58 1.85 1000`", parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error en /risk")
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def player_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /player EQUIPO | Jugador1:status Jugador2:status
+
+    Compute how player absences/presences affect the team's xG.
+
+    Status options: absent · doubt · returning · available
+
+    Examples:
+      /player Man City | Haaland:absent DeBruyne:doubt
+      /player Real Madrid vs Barça | Vinicius:doubt Bellingham:absent
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso: `/player EQUIPO | Jugador:status Jugador:status`\n\n"
+            "Ejemplo: `/player Man City | Haaland:absent DeBruyne:doubt`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+    try:
+        if "|" not in raw:
+            raise ValueError("Usa el separador |: EQUIPO | Jugador:status ...")
+        team_str, players_str = raw.split("|", 1)
+        team_name = team_str.strip()
+
+        from core.player_impact import parse_player_statuses, compute_team_player_impact, format_player_impact
+        players = parse_player_statuses(players_str)
+
+        if not players:
+            raise ValueError("No se encontraron jugadores. Formato: Jugador:absent")
+
+        # Try to get real xG from football engine
+        xg_base = 1.4  # default
+        try:
+            from sports.football import TEAM_STATS, LEAGUE_AVG, resolve_team
+            resolved = resolve_team(team_name)
+            if resolved and resolved in TEAM_STATS:
+                stats    = TEAM_STATS[resolved]
+                xg_base  = stats.get("avg_scored", 1.4)
+        except Exception:
+            pass
+
+        impact = compute_team_player_impact(xg_base, xg_base * 0.7, players)
+        text   = format_player_impact(team_name, xg_base, impact)
+        await update.message.reply_text(text, parse_mode="Markdown")
+
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}", parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error en /player")
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def referee_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /referee NOMBRE DEL ÁRBITRO [vs PARTIDO]
+
+    Show referee profile: card rates, penalty rate, style, signals.
+
+    Examples:
+      /referee Jesus Gil Manzano
+      /referee Anthony Taylor vs Arsenal vs Man City
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso: `/referee NOMBRE [vs PARTIDO]`\n\n"
+            "Ejemplo: `/referee Jesus Gil Manzano`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+    # Split on " vs " for optional event context
+    if " vs " in raw.lower():
+        parts = raw.split(" vs ", 1)
+        referee_name = parts[0].strip()
+        event        = " vs ".join(parts)  # show full event
+    else:
+        referee_name = raw.strip()
+        event        = ""
+
+    try:
+        from core.referee_model import referee_impact, format_referee_impact
+        impact = referee_impact(referee_name, 1.5, 1.0)
+        text   = format_referee_impact(impact, event=event)
+        await update.message.reply_text(text, parse_mode="Markdown")
+
+    except Exception as e:
+        logger.exception("Error en /referee")
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /weather CONDICIÓN TEMP VIENTO LLUVIA CESPED
+
+    Compute weather impact on xG, corners, and cards.
+
+    Conditions: normal · lluvia · heavy_rain · viento · heavy_wind · nieve · calor · frio
+    Pitch:      good · wet · heavy · frozen · artificial
+
+    Example:
+      /weather lluvia 8 45 5 wet
+      /weather normal 22 10 0 good
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso: `/weather CONDICIÓN TEMP VIENTO LLUVIA CESPED`\n\n"
+            "Ejemplo: `/weather lluvia 8 45 5 wet`\n"
+            "Condiciones: normal · lluvia · heavy\\_rain · viento · nieve · calor · frio\n"
+            "Césped: good · wet · heavy · frozen · artificial",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+    try:
+        from core.weather_model import parse_weather_input, compute_weather_impact, format_weather_impact
+        cond = parse_weather_input(raw)
+        if not cond:
+            raise ValueError("No se pudo interpretar las condiciones. Ej: `lluvia 8 45 5 wet`")
+        impact = compute_weather_impact(cond)
+        text   = format_weather_impact(impact)
+        await update.message.reply_text(text, parse_mode="Markdown")
+
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}", parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error en /weather")
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def portfolio_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /portfolio PROB:CUOTA:DEPORTE:MERCADO PROB:CUOTA:DEPORTE:MERCADO ... [bankroll=X]
+
+    Optimise a bet portfolio using Kelly criterion across multiple legs.
+
+    Example:
+      /portfolio 0.58:1.85:Fútbol:HomeWin 0.61:1.72:NBA:Over25 0.55:1.90:NFL:Spread bankroll=1000
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso:\n`/portfolio PROB:CUOTA:DEPORTE:MERCADO ... [bankroll=X]`\n\n"
+            "Ejemplo:\n`/portfolio 0.58:1.85:Fútbol:HomeWin 0.61:1.72:NBA:Over25 bankroll=1000`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw      = " ".join(context.args)
+    bankroll = 1000.0
+
+    # Extract bankroll= parameter
+    import re
+    br_match = re.search(r"bankroll=(\d+(?:\.\d+)?)", raw)
+    if br_match:
+        bankroll = float(br_match.group(1))
+        raw      = raw.replace(br_match.group(0), "").strip()
+
+    try:
+        from core.portfolio_optimizer import Bet, optimize_portfolio, format_portfolio
+        bets = []
+        for token in raw.split():
+            if not token:
+                continue
+            parts = token.split(":")
+            if len(parts) < 2:
+                continue
+            try:
+                prob   = float(parts[0])
+                prob   = prob / 100 if prob > 1 else prob
+                odds   = float(parts[1])
+                sport  = parts[2] if len(parts) > 2 else "General"
+                market = parts[3] if len(parts) > 3 else "Apuesta"
+                bets.append(Bet(market=market, sport=sport, prob=prob, odds=odds))
+            except (ValueError, IndexError):
+                continue
+
+        if not bets:
+            raise ValueError("No se encontraron apuestas válidas. Formato: 0.58:1.85:Fútbol:HomeWin")
+
+        portfolio = optimize_portfolio(bets, bankroll)
+        if not portfolio.bets:
+            await update.message.reply_text(
+                "⚠️ Ninguna apuesta tiene valor positivo (EV > 0).\n"
+                "Revisa tus probabilidades y cuotas.",
+                parse_mode="Markdown",
+            )
+            return
+
+        text = format_portfolio(portfolio, bankroll)
+        await update.message.reply_text(text, parse_mode="Markdown")
+
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {e}", parse_mode="Markdown")
+    except Exception as e:
+        logger.exception("Error en /portfolio")
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def bayes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /bayes LOCAL vs VISITANTE [opciones]
+
+    Apply Bayesian update to match probabilities given additional evidence.
+    Evidence flags (append after team names):
+      strict         — árbitro estricto
+      permissive     — árbitro permisivo
+      rain           — lluvia (weather_xg_mult=0.90)
+      heavy_rain     — lluvia fuerte (weather_xg_mult=0.82)
+      home_inj=X     — % baja xG local (0-30)
+      away_inj=X     — % baja xG visitante
+      home_form=X    — boost forma local (-3 a +3)
+      away_form=X    — boost forma visitante
+
+    Example:
+      /bayes Real Madrid vs Barcelona strict home_inj=15 rain
+    """
+    if not context.args or " vs " not in " ".join(context.args).lower():
+        await update.message.reply_text(
+            "❌ Uso: `/bayes LOCAL vs VISITANTE [opciones]`\n\n"
+            "Opciones: `strict` · `permissive` · `rain` · `heavy_rain`\n"
+            "  `home_inj=15` · `away_inj=10` · `home_form=1` · `away_form=-1`\n\n"
+            "Ejemplo: `/bayes Real Madrid vs Barcelona strict home_inj=15`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+    try:
+        # Split off " vs " to get teams
+        vs_idx   = raw.lower().find(" vs ")
+        home_str = raw[:vs_idx].strip()
+        rest     = raw[vs_idx + 4:]
+        # Everything after the away team (first word group before flags)
+        tokens   = rest.split()
+        # Parse away team (everything until first flag-like token)
+        away_tokens = []
+        flag_tokens = []
+        for t in tokens:
+            if ("=" in t or t.lower() in ("strict","permissive","rain","heavy_rain","snow","wind")):
+                flag_tokens.append(t)
+            else:
+                if not flag_tokens:
+                    away_tokens.append(t)
+                else:
+                    flag_tokens.append(t)
+        away_str = " ".join(away_tokens).strip()
+
+        # Get base probabilities from football model
+        await update.message.reply_text("⏳ Calculando probabilidades base…")
+        try:
+            base_pred = get_full_prediction(home_str, away_str)
+            ph = base_pred["home_win"] / 100
+            pd = base_pred["draw"]     / 100
+            pa = base_pred["away_win"] / 100
+            elo_diff = base_pred.get("home_elo", 1500) - base_pred.get("away_elo", 1500)
+        except Exception:
+            ph, pd, pa = 0.45, 0.27, 0.28
+            elo_diff = 0
+
+        # Parse evidence flags
+        import re as _re
+        evidence = {"elo_diff": elo_diff}
+        evidence_labels = []
+
+        for t in flag_tokens:
+            tl = t.lower()
+            if tl == "strict":
+                evidence["referee_strict"] = True
+                evidence_labels.append("Árbitro estricto")
+            elif tl == "permissive":
+                evidence["referee_permissive"] = True
+                evidence_labels.append("Árbitro permisivo")
+            elif tl == "rain":
+                evidence["weather_xg_mult"] = 0.90
+                evidence_labels.append("Lluvia (xG -10%)")
+            elif tl == "heavy_rain":
+                evidence["weather_xg_mult"] = 0.82
+                evidence_labels.append("Lluvia fuerte (xG -18%)")
+            elif tl == "snow":
+                evidence["weather_xg_mult"] = 0.78
+                evidence_labels.append("Nieve (xG -22%)")
+            elif tl == "wind":
+                evidence["weather_xg_mult"] = 0.91
+                evidence_labels.append("Viento (xG -9%)")
+            else:
+                m = _re.match(r"home_inj=(\d+(?:\.\d+)?)", tl)
+                if m:
+                    evidence["home_injury_pct"] = float(m.group(1))
+                    evidence_labels.append(f"Bajas local {m.group(1)}%")
+                m = _re.match(r"away_inj=(\d+(?:\.\d+)?)", tl)
+                if m:
+                    evidence["away_injury_pct"] = float(m.group(1))
+                    evidence_labels.append(f"Bajas visitante {m.group(1)}%")
+                m = _re.match(r"home_form=(-?\d+(?:\.\d+)?)", tl)
+                if m:
+                    evidence["home_form_boost"] = float(m.group(1))
+                    evidence_labels.append(f"Forma local {m.group(1)}")
+                m = _re.match(r"away_form=(-?\d+(?:\.\d+)?)", tl)
+                if m:
+                    evidence["away_form_boost"] = float(m.group(1))
+                    evidence_labels.append(f"Forma visitante {m.group(1)}")
+
+        from core.bayesian_update import BayesianUpdater, format_bayesian_update
+        bu   = BayesianUpdater(ph, pd, pa)
+        bu.update_evidence(evidence)
+        post = bu.posterior()
+
+        text = format_bayesian_update(
+            prior           = (ph * 100, pd * 100, pa * 100),
+            posterior       = post,
+            event           = f"{home_str} vs {away_str}",
+            evidence_labels = evidence_labels,
+        )
+        await update.message.reply_text(text, parse_mode="Markdown")
+
+    except Exception as e:
+        logger.exception("Error en /bayes")
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def rl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /rl CONFIANZA EV_PCT DRAWDOWN_PCT [BANKROLL]
+
+    Get RL (Q-Learning) agent's recommended stake for a betting situation.
+
+    Arguments:
+      CONFIANZA   : ALTA | MEDIA | BAJA
+      EV_PCT      : expected value percentage (e.g. 5.2)
+      DRAWDOWN_PCT: current drawdown % (e.g. 3.0)
+      BANKROLL    : optional bankroll amount (default 1000)
+
+    Example:
+      /rl ALTA 5.2 3.0 1000
+    """
+    if not context.args or len(context.args) < 3:
+        await update.message.reply_text(
+            "❌ Uso: `/rl CONFIANZA EV DRAWDOWN [BANKROLL]`\n\n"
+            "Ejemplo: `/rl ALTA 5.2 3.0 1000`\n"
+            "Confianza: `ALTA` · `MEDIA` · `BAJA`",
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        confidence   = context.args[0].upper()
+        ev_pct       = float(context.args[1])
+        drawdown_pct = float(context.args[2])
+        bankroll     = float(context.args[3]) if len(context.args) >= 4 else 1000.0
+        market       = " ".join(context.args[4:]) if len(context.args) > 4 else ""
+
+        from core.rl_strategy import RLBettingAgent, format_rl_advice
+        agent = RLBettingAgent()
+        text  = format_rl_advice(agent, confidence, ev_pct, drawdown_pct, bankroll, market)
+        await update.message.reply_text(text, parse_mode="Markdown")
+
+    except (ValueError, IndexError):
+        await update.message.reply_text(
+            "❌ Valores inválidos. Ej: `/rl ALTA 5.2 3.0 1000`", parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.exception("Error en /rl")
+        await update.message.reply_text(f"❌ Error: {e}")
+
+
 async def scanner_job(context: ContextTypes.DEFAULT_TYPE):
     """
     Scheduled job (every 15 min): scan all tracked markets and send
@@ -1737,6 +2407,19 @@ def main():
     app.add_handler(CommandHandler("form",    form_command))
     app.add_handler(CommandHandler("markets", markets_command))
     app.add_handler(CommandHandler("intel",   intel_command))
+
+    # ── Intelligence commands (Liquidity, Steam, Consensus, CLV, Risk, Player, Referee, Weather, Portfolio, Bayes, RL) ──
+    app.add_handler(CommandHandler("liquidity",  liquidity_command))
+    app.add_handler(CommandHandler("steam",      steam_command))
+    app.add_handler(CommandHandler("consensus",  consensus_command))
+    app.add_handler(CommandHandler("clv",        clv_command))
+    app.add_handler(CommandHandler("risk",       risk_command))
+    app.add_handler(CommandHandler("player",     player_command))
+    app.add_handler(CommandHandler("referee",    referee_command))
+    app.add_handler(CommandHandler("weather",    weather_command))
+    app.add_handler(CommandHandler("portfolio",  portfolio_command))
+    app.add_handler(CommandHandler("bayes",      bayes_command))
+    app.add_handler(CommandHandler("rl",         rl_command))
 
     # ── Universal Market Error Scanner commands ──
     app.add_handler(CommandHandler("scanodds",     scanodds_command))
