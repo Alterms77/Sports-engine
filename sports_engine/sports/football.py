@@ -251,6 +251,19 @@ def expected_goals(
     h2h_mult = h2h_adjustment(h2h_records)
     xg_home *= h2h_mult
 
+    # ── Elo adjustment ──
+    try:
+        from core.elo import load_elo_ratings, elo_xg_adjustment
+        _elo = load_elo_ratings()
+        home_elo = _elo.get(home_name, 1500)
+        away_elo = _elo.get(away_name, 1500)
+        elo_home_mult, elo_away_mult = elo_xg_adjustment(home_elo, away_elo)
+        xg_home *= elo_home_mult
+        xg_away *= elo_away_mult
+    except Exception:
+        home_elo = 1500
+        away_elo = 1500
+
     return round(max(xg_home, 0.10), 2), round(max(xg_away, 0.10), 2)
 
 
@@ -408,6 +421,43 @@ def predict_match(
     cs_home = clean_sheet_prob(h_home_data["defense"]) if h_home_data else None
     cs_away = clean_sheet_prob(a_away_data["defense"]) if a_away_data else None
 
+    # ── Corners ──
+    corners_data = expected_corners(xg_home, xg_away, league)
+    corners_mkt = corners_market(corners_data)
+
+    # ── Elo ratings (for display) ──
+    try:
+        from core.elo import load_elo_ratings
+        _elo = load_elo_ratings()
+        elo_home = _elo.get(home_resolved, 1500)
+        elo_away = _elo.get(away_resolved, 1500)
+    except Exception:
+        elo_home = 1500
+        elo_away = 1500
+
+    # ── Win to Nil detection ──
+    win_to_nil = None
+    if (
+        xg_away < 1.0
+        and cs_home is not None and cs_home > 0.35
+        and final_probs["btts"] < 55
+        and (xg_home - xg_away) > 1.2
+    ):
+        win_to_nil = {
+            "team": home_resolved,
+            "high_value": xg_home > 2.0,
+        }
+    elif (
+        xg_home < 1.0
+        and cs_away is not None and cs_away > 0.35
+        and final_probs["btts"] < 55
+        and (xg_away - xg_home) > 1.2
+    ):
+        win_to_nil = {
+            "team": away_resolved,
+            "high_value": xg_away > 2.0,
+        }
+
     return {
         "home": home_resolved,
         "away": away_resolved,
@@ -424,13 +474,19 @@ def predict_match(
         "top_scores": top_scorelines(xg_home, xg_away),
         "sim_home_goals": simulation["avg_home_goals"],
         "sim_away_goals": simulation["avg_away_goals"],
-        "corners": expected_corners(xg_home, xg_away),
-        "corners_market": corners_market(expected_corners(xg_home, xg_away)),
+        "corners": corners_data["total"],
+        "corners_home": corners_data["home"],
+        "corners_away": corners_data["away"],
+        "corners_total": corners_data["total"],
+        "corners_market": corners_mkt,
         "cards": expected_cards(xg_home, xg_away),
         "shots_on_target": football_shots_on_target(xg_home, xg_away),
         "cards_detail": football_cards_detail(xg_home, xg_away),
         "value_bets": value,
         "confidence": confidence_level(final_probs),
+        "elo_home": elo_home,
+        "elo_away": elo_away,
+        "win_to_nil": win_to_nil,
         # ── Intelligence context for display ──
         "form_home": {
             "emoji": form_emoji(home_streak),
