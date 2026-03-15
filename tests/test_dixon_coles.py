@@ -124,20 +124,22 @@ class TestDixonColesProbabilities:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestExpectedCorners:
-    def test_basic_formula(self):
-        """corners = 8 + total_xg * 2.3"""
-        for xg_h, xg_a in [(1.5, 1.0), (2.0, 0.8), (0.5, 0.5)]:
-            expected = round(8 + (xg_h + xg_a) * 2.3, 1)
-            assert expected_corners(xg_h, xg_a) == expected
+    def test_returns_dict(self):
+        """expected_corners now returns a dict with home/away/total keys."""
+        result = expected_corners(1.5, 1.0)
+        assert isinstance(result, dict)
+        assert "home" in result and "away" in result and "total" in result
 
-    def test_minimum_is_eight(self):
-        """With zero xG, still expect base 8 corners."""
-        assert expected_corners(0, 0) == 8.0
+    def test_minimum_floor(self):
+        """With zero xG, home and away corners should still be at least 2.0."""
+        result = expected_corners(0, 0)
+        assert result["home"] >= 2.0
+        assert result["away"] >= 2.0
 
     def test_higher_xg_more_corners(self):
         low  = expected_corners(0.5, 0.5)
         high = expected_corners(2.5, 2.5)
-        assert high > low
+        assert high["total"] > low["total"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN: str = os.getenv("TOKEN", "")
 API_SPORTS_KEY: str = os.getenv("API_SPORTS_KEY", "")
+ALERTS_CHANNEL_ID: str = os.getenv("ALERTS_CHANNEL_ID", "")
 
 # ===============================
 # 🌐 API ENDPOINTS

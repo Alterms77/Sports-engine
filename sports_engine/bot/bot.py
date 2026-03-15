@@ -186,16 +186,30 @@ def format_prediction(pred: dict) -> str:
             f"🟥 Total rojas: `{cd['total_red']:.2f}` → {over_label}\n"
         )
     else:
-        card_line = f"🚩 Córners: `{pred['corners']}`  🟨 Tarjetas: `{pred['cards']}`\n"
+        card_line = f"🟨 Tarjetas: `{pred['cards']}`\n"
 
     corners_str = ""
-    if corner_mkt:
+    if corner_mkt and corner_mkt.get("total") is not None:
+        home1 = pred["home"].split()[0]
+        away1 = pred["away"].split()[0]
         corners_str = (
-            f"🚩 *Córners* — Total esperado: `{corner_mkt['expected']}`  "
-            f"Línea {corner_mkt['line']}: `{corner_mkt['suggestion']}`\n"
+            f"🚩 *Córners* — {home1}: `{corner_mkt['home']}` | {away1}: `{corner_mkt['away']}` | "
+            f"Total: `{corner_mkt['total']}`\n"
+            f"  📊 Over {corner_mkt['line']}: `{corner_mkt['over_prob']}%` "
+            f"| Under: `{corner_mkt['under_prob']}%` → `{corner_mkt['suggestion']}`\n"
         )
     else:
-        corners_str = f"🚩 Córners: `{pred['corners']}`\n"
+        corners_str = f"🚩 Córners: `{pred.get('corners_total', pred.get('corners', '?'))}`\n"
+
+    # Win to Nil
+    win_to_nil_str = ""
+    wtn = pred.get("win_to_nil")
+    if wtn:
+        value_tag = " ⭐ *VALOR ALTO* (probable 2-0 o 3-0)" if wtn.get("high_value") else ""
+        win_to_nil_str = (
+            f"\n💡 *Pick adicional: Victoria a cero*\n"
+            f"  🔒 {wtn['team']} gana sin recibir gol{value_tag}\n"
+        )
 
     return (
         f"⚽ *{pred['home']} vs {pred['away']}*{league_str}\n\n"
@@ -219,7 +233,8 @@ def format_prediction(pred: dict) -> str:
         f"{cs_str}"
         f"{corners_str}"
         f"{card_line}"
-        f"{value_section}\n\n"
+        f"{value_section}"
+        f"{win_to_nil_str}\n\n"
         f"💡 *Mejor Pick:* {_best_pick(pred)}\n"
         f"{emoji} *Confianza:* {conf}"
         + _live_source_badge(pred)
@@ -373,6 +388,11 @@ async def predict(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # fetch_live=True: automatically pull live form from SofaScore / TheSportsDB
         prediction = get_full_prediction(home, away, fetch_live=True)
+        try:
+            from core.backtesting import log_pick
+            log_pick(prediction)
+        except Exception as _log_err:
+            logger.warning("Could not log pick: %s", _log_err)
         await update.message.reply_text(
             format_prediction(prediction), parse_mode="Markdown"
         )
@@ -480,16 +500,44 @@ async def value(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /stats EQUIPO
-    Shows home/away attack+defense, recent form, streak, and clean sheet prob.
+    /stats         — Show bot prediction statistics (picks hit rate)
+    /stats EQUIPO  — Show team historical stats
     """
     if not context.args:
-        await update.message.reply_text(
-            "❌ Uso:\n`/stats EQUIPO`\n\nEjemplo:\n`/stats Bayern Munich`",
-            parse_mode="Markdown",
+        # Show bot prediction statistics
+        from core.backtesting import get_stats_summary
+        stats_data = get_stats_summary(days=30)
+
+        if stats_data["total_picks"] == 0:
+            await update.message.reply_text("📊 No hay picks registrados aún.")
+            return
+
+        text = (
+            "📊 *ESTADÍSTICAS DEL BOT*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"📋 Total picks: {stats_data['total_picks']}\n"
+            f"✅ Aciertos: {stats_data['correct']}\n"
+            f"📈 Hit rate: {stats_data['hit_rate']}%\n\n"
+            "📊 *Por nivel de confianza:*\n"
         )
+
+        for level in ["ALTA", "MEDIA", "BAJA"]:
+            data = stats_data["by_confidence"].get(level, {})
+            if data.get("total", 0) > 0:
+                emoji = "🟢" if level == "ALTA" else "🟡" if level == "MEDIA" else "🔴"
+                text += f"{emoji} {level}: {data['correct']}/{data['total']} ({data['hit_rate']}%)\n"
+
+        last7 = stats_data.get("last_7_days", {})
+        if last7.get("total", 0) > 0:
+            text += f"\n📅 Últimos 7 días: {last7['hit_rate']}% ({last7['correct']}/{last7['total']})\n"
+
+        if stats_data.get("streak", 0) > 0:
+            text += f"🔥 Racha actual: {stats_data['streak']} aciertos seguidos\n"
+
+        await update.message.reply_text(text, parse_mode="Markdown")
         return
 
+    # Show team stats
     team_name = " ".join(context.args)
     s = get_team_stats_summary(team_name)
 
@@ -1089,6 +1137,47 @@ async def tabla(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===============================
 
 
+async def send_daily_alerts(context: ContextTypes.DEFAULT_TYPE):
+    """Scheduled job: send high-confidence picks to alerts channel."""
+    from core.config import ALERTS_CHANNEL_ID
+    channel_id = ALERTS_CHANNEL_ID
+    if not channel_id:
+        return
+
+    matches = load_today_matches()
+    if not matches:
+        return
+
+    alerts = []
+    for match in matches:
+        try:
+            pred = get_full_prediction(match["home"], match["away"], fetch_live=True)
+            if pred["confidence"] == "ALTA":
+                probs = {
+                    "Local": pred["home_win"],
+                    "Empate": pred["draw"],
+                    "Visitante": pred["away_win"],
+                }
+                best = max(probs, key=probs.get)
+                alerts.append(
+                    f"🔥 {pred['home']} vs {pred['away']}\n"
+                    f"   Pick: {best} ({probs[best]}%)\n"
+                    f"   xG: {pred['xg_home']} - {pred['xg_away']}"
+                )
+        except Exception:
+            continue
+
+    if alerts:
+        header = f"🤖 *PICKS DE ALTA CONFIANZA*\n📅 {datetime.utcnow().strftime('%d/%m/%Y')}\n\n"
+        text = header + "\n\n".join(alerts)
+        try:
+            await context.bot.send_message(
+                chat_id=channel_id, text=text, parse_mode="Markdown"
+            )
+        except Exception as exc:
+            logger.warning("Could not send daily alerts: %s", exc)
+
+
 def main():
     logger.info("🚀 Iniciando Sports Engine Bot…")
 
@@ -1126,6 +1215,14 @@ def main():
     app.add_handler(CommandHandler("scores", scores))
     app.add_handler(CommandHandler("liveteam", liveteam))
     app.add_handler(CommandHandler("tabla", tabla))
+
+    # ── Daily alerts scheduler (8 AM) ──
+    from core.config import ALERTS_CHANNEL_ID
+    if ALERTS_CHANNEL_ID and app.job_queue:
+        from datetime import time as dt_time
+        alert_time = dt_time(hour=8, minute=0)
+        app.job_queue.run_daily(send_daily_alerts, time=alert_time)
+        logger.info("Daily alerts scheduled at 08:00 UTC → channel %s", ALERTS_CHANNEL_ID)
 
     logger.info("🤖 Bot corriendo — 5 deportes + datos en vivo (SofaScore/TheSportsDB/ESPN)…")
     app.run_polling()
