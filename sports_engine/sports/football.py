@@ -150,7 +150,8 @@ def _dc_correction(
 # ===============================
 
 def expected_goals(
-    home_name: str, away_name: str, league: str = "default"
+    home_name: str, away_name: str, league: str = "default",
+    live_context: dict = None,
 ) -> tuple:
     """
     Compute expected goals using home/away split statistics.
@@ -166,7 +167,13 @@ def expected_goals(
     For teams without enough split data, falls back to combined stats with an
     explicit home advantage multiplier (league-specific from config).
 
-    Form and H2H adjustments are applied on top.
+    Form, H2H, and optional live_context adjustments are applied on top.
+
+    live_context : dict with optional keys
+        "home_form" : {"attack": float, "defense": float, ...}  from live aggregator
+        "away_form" : {"attack": float, "defense": float, ...}  from live aggregator
+        When present, live attack/defense values replace the decay-weighted form
+        for a 30% blend, giving the model real-time accuracy.
     """
     h_home = HOME_STATS.get(home_name)
     a_away = AWAY_STATS.get(away_name)
@@ -211,6 +218,24 @@ def expected_goals(
     if away_form and a_combined and a_combined["attack"] > 0:
         form_attack_ratio = away_form["attack"] / a_combined["attack"]
         xg_away *= 0.70 + 0.30 * min(form_attack_ratio, 2.0)
+
+    # ── Live data enrichment (SofaScore / TheSportsDB) ──
+    # When live_context is available, use real-time attack/defense averages
+    # to blend with the CSV model.  Weight: 70% model + 30% live recent form.
+    if live_context:
+        lhf = live_context.get("home_form", {})
+        laf = live_context.get("away_form", {})
+        league_avg_live = (LEAGUE_HOME_AVG + LEAGUE_AWAY_AVG) / 2
+
+        if lhf and isinstance(lhf.get("attack"), (int, float)) and league_avg_live > 0:
+            live_ratio = lhf["attack"] / max(league_avg_live, 0.1)
+            live_ratio = min(max(live_ratio, 0.3), 2.5)  # clamp: 30%-250% of average
+            xg_home = 0.70 * xg_home + 0.30 * (xg_home * live_ratio)
+
+        if laf and isinstance(laf.get("attack"), (int, float)) and league_avg_live > 0:
+            live_ratio = laf["attack"] / max(league_avg_live, 0.1)
+            live_ratio = min(max(live_ratio, 0.3), 2.5)
+            xg_away = 0.70 * xg_away + 0.30 * (xg_away * live_ratio)
 
     # ── Streak momentum multiplier ──
     home_streak = current_streak(home_history) if home_history else {"multiplier": 1.0}
@@ -289,7 +314,21 @@ def predict_match(
     away: str,
     league: str = "default",
     odds: dict = None,
+    live_context: dict = None,
 ) -> dict:
+    """
+    Predict a football match.
+
+    Parameters
+    ----------
+    home, away     : team names (will be resolved to canonical names)
+    league         : override league detection (uses auto-detect if "default")
+    odds           : {"home": float, "draw": float, "away": float} for value bets
+    live_context   : optional dict from live_aggregator with keys
+                     "home_form" and "away_form" (live form data from SofaScore
+                     or TheSportsDB).  When provided, live attack/defense averages
+                     blend with the CSV-based model for greater accuracy.
+    """
     home_resolved = resolve_team(home)
     away_resolved = resolve_team(away)
 
@@ -302,7 +341,9 @@ def predict_match(
     if league == "default":
         league = detect_league(home_resolved, away_resolved)
 
-    xg_home, xg_away = expected_goals(home_resolved, away_resolved, league)
+    xg_home, xg_away = expected_goals(
+        home_resolved, away_resolved, league, live_context=live_context
+    )
 
     # Dixon-Coles analytical probabilities
     probs = dixon_coles_probabilities(xg_home, xg_away)
@@ -343,6 +384,17 @@ def predict_match(
     home_streak = current_streak(home_history)
     away_streak = current_streak(away_history)
 
+    # ── Live form override (SofaScore / TheSportsDB) ──
+    live_home_form = (live_context or {}).get("home_form", {})
+    live_away_form = (live_context or {}).get("away_form", {})
+
+    # Build display last5 — prefer live data (more current)
+    home_last5 = live_home_form.get("last5") or home_streak["last5"]
+    away_last5 = live_away_form.get("last5") or away_streak["last5"]
+    live_source = (
+        live_home_form.get("source") or live_away_form.get("source") or None
+    )
+
     # ── H2H context ──
     h2h_records = H2H_DATA.get((home_resolved, away_resolved), [])
     h2h_info = h2h_summary(h2h_records)
@@ -376,17 +428,20 @@ def predict_match(
         # ── Intelligence context for display ──
         "form_home": {
             "emoji": form_emoji(home_streak),
-            "last5": home_streak["last5"],
+            "last5": home_last5,
             "streak": home_streak,
         },
         "form_away": {
             "emoji": form_emoji(away_streak),
-            "last5": away_streak["last5"],
+            "last5": away_last5,
             "streak": away_streak,
         },
         "h2h": h2h_info,
         "clean_sheet_home": cs_home,
         "clean_sheet_away": cs_away,
+        "live_source": live_source,
+        "live_home_form": live_home_form,
+        "live_away_form": live_away_form,
     }
 
 
@@ -399,8 +454,46 @@ def get_full_prediction(
     away: str,
     league: str = "default",
     odds: dict = None,
+    live_context: dict = None,
+    fetch_live: bool = False,
 ) -> dict:
-    return predict_match(home, away, league=league, odds=odds)
+    """
+    Full prediction for a football match.
+
+    Parameters
+    ----------
+    home, away    : team names
+    league        : override auto-detection
+    odds          : {"home", "draw", "away"} for value bet calculation
+    live_context  : pre-fetched live context dict (keys: "home_form", "away_form")
+    fetch_live    : if True, automatically fetch live context from SofaScore/TheSportsDB
+                    before prediction (adds network latency but improves accuracy)
+    """
+    if fetch_live and live_context is None:
+        live_context = _fetch_live_context(home, away)
+
+    return predict_match(home, away, league=league, odds=odds, live_context=live_context)
+
+
+def _fetch_live_context(home: str, away: str) -> dict:
+    """
+    Attempt to fetch live form data for both teams from SofaScore / TheSportsDB.
+    Returns {"home_form": dict, "away_form": dict} — empty sub-dicts on failure.
+    """
+    try:
+        from api.live_aggregator import get_team_live_form
+        home_form = get_team_live_form(home, "football")
+        away_form = get_team_live_form(away, "football")
+        if home_form or away_form:
+            logger.info(
+                "Live context fetched: home=%s (%s), away=%s (%s)",
+                home, home_form.get("source", "none"),
+                away, away_form.get("source", "none"),
+            )
+        return {"home_form": home_form, "away_form": away_form}
+    except Exception as exc:
+        logger.debug("Live context fetch failed: %s", exc)
+        return {"home_form": {}, "away_form": {}}
 
 
 def get_team_stats_summary(team_name: str) -> dict:

@@ -26,6 +26,42 @@ API_SPORTS_BASE_URL = "https://v3.football.api-sports.io"
 ESPN_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports"
 ESPN_CACHE_TTL = 1800  # seconds (30 min)
 
+# ── SofaScore (unofficial public REST API, no key needed) ────────────────────
+SOFASCORE_BASE_URL = "https://api.sofascore.com/api/v1"
+SOFASCORE_CACHE_TTL = 900   # 15 min (live data changes fast)
+SOFASCORE_LIVE_TTL  = 60    # 1 min for live events
+
+# SofaScore unique-tournament IDs + season IDs (2024-25 season)
+SOFASCORE_LEAGUES = {
+    "Premier League": {"tournament_id": 17,  "season_id": 61627},
+    "La Liga":        {"tournament_id": 8,   "season_id": 61643},
+    "Bundesliga":     {"tournament_id": 35,  "season_id": 63516},
+    "Serie A":        {"tournament_id": 23,  "season_id": 63515},
+    "Ligue 1":        {"tournament_id": 34,  "season_id": 63520},
+    "Liga MX":        {"tournament_id": 352, "season_id": 63698},
+    "Champions League": {"tournament_id": 7, "season_id": 61644},
+}
+
+# ── TheSportsDB (completely free, public API, key "3") ────────────────────────
+THESPORTSDB_BASE_URL = "https://www.thesportsdb.com/api/v1/json/3"
+THESPORTSDB_CACHE_TTL = 1800  # 30 min
+
+# TheSportsDB league IDs
+THESPORTSDB_LEAGUES = {
+    "Premier League":   "4328",
+    "La Liga":          "4335",
+    "Bundesliga":       "4331",
+    "Serie A":          "4332",
+    "Ligue 1":          "4334",
+    "Liga MX":          "4350",
+    "MLS":              "4346",
+    "Champions League": "4480",
+    "NBA":              "4387",
+    "NFL":              "4391",
+    "MLB":              "4424",
+    "NHL":              "4380",
+}
+
 # ===============================
 # ⚽ LEAGUE IDs
 # ===============================

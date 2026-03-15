@@ -35,6 +35,17 @@ import sports.baseball as _baseball
 import sports.tennis as _tennis
 import sports.american_football as _nfl
 from api.espn_api import get_all_scoreboards
+from api.live_aggregator import (
+    get_live_scores,
+    get_all_live_scores,
+    get_today_schedule,
+    get_team_live_form,
+    get_league_table,
+    get_next_fixtures,
+    format_live_scoreboard,
+    format_fixture_list,
+    format_last_results,
+)
 from core.teams import normalize_team
 from core.config import TELEGRAM_TOKEN, validate_config
 
@@ -173,7 +184,18 @@ def format_prediction(pred: dict) -> str:
         f"{value_section}\n\n"
         f"💡 *Mejor Pick:* {_best_pick(pred)}\n"
         f"{emoji} *Confianza:* {conf}"
+        + _live_source_badge(pred)
     )
+
+
+def _live_source_badge(pred: dict) -> str:
+    """Return a small live-data source note when live data was used."""
+    source = pred.get("live_source")
+    if not source:
+        return ""
+    names = {"sofascore": "SofaScore", "thesportsdb": "TheSportsDB", "espn": "ESPN"}
+    pretty = names.get(source, source.capitalize())
+    return f"\n\n📡 _Forma en vivo: {pretty}_"
 
 
 # ===============================
@@ -183,19 +205,25 @@ def format_prediction(pred: dict) -> str:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 *Sports Engine — Multi-Sport Bot*\n\n"
+        "🤖 *Sports Engine — Multi-Sport + Datos en Vivo*\n\n"
         "⚽ Fútbol: `/predict LOCAL vs VISITANTE`\n"
         "🏀 NBA: `/nba LOCAL vs VISITANTE`\n"
         "⚾ MLB: `/mlb LOCAL vs VISITANTE`\n"
         "🏈 NFL: `/nfl LOCAL vs VISITANTE`\n"
         "🎾 Tenis: `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
+        "📡 *Datos en vivo (SofaScore / TheSportsDB / ESPN)*\n"
+        "  `/live [deporte]` — marcadores en vivo\n"
+        "  `/scores [deporte]` — partidos de hoy\n"
+        "  `/liveteam EQUIPO` — forma + próximos partidos\n"
+        "  `/tabla LIGA` — clasificación\n\n"
         "📅 `/today` — todos los partidos de hoy\n"
         "🏟️ `/sports` — ver todos los comandos\n"
         "❓ `/help` — ayuda detallada\n\n"
         "_Ejemplos:_\n"
         "`/predict América vs Chivas`\n"
-        "`/nba Lakers vs Celtics`\n"
-        "`/tennis Djokovic vs Alcaraz clay`",
+        "`/live futbol`\n"
+        "`/liveteam Barcelona`\n"
+        "`/tabla Premier League`",
         parse_mode="Markdown",
     )
 
@@ -206,38 +234,35 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "━━━━━━━━━━━━━━━━━━━━\n"
         "⚽ *FÚTBOL*\n"
         "🔹 `/predict LOCAL vs VISITANTE`\n"
-        "  xG, 1X2, Over/BTTS, marcador probable, forma, H2H, córners, tarjetas.\n"
+        "  xG, 1X2, Over/BTTS, marcador probable, forma en vivo,\n"
+        "  H2H, córners, tarjetas. Usa SofaScore/TheSportsDB.\n"
         "  _Ej:_ `/predict Real Madrid vs Barcelona`\n\n"
-        "🔹 `/stats EQUIPO`\n"
-        "  Ataque/defensa local y visitante, forma y clean sheet rate.\n"
-        "  _Ej:_ `/stats Bayern Munich`\n\n"
-        "🔹 `/value LOCAL vs VISITANTE C\\_L C\\_E C\\_V`\n"
-        "  Value bets con tus cuotas.\n"
-        "  _Ej:_ `/value Liverpool vs Chelsea 1.90 3.50 4.20`\n\n"
+        "🔹 `/stats EQUIPO` — stats históricas del equipo\n"
+        "🔹 `/value L vs V C\\_L C\\_E C\\_V` — value bets\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "🏀 *BASQUETBOL (NBA)*\n"
-        "🔹 `/nba LOCAL vs VISITANTE`\n"
-        "  Prob. victoria, marcador proyectado, spread, over/under.\n"
-        "  _Ej:_ `/nba Lakers vs Celtics`\n\n"
+        "📡 *DATOS EN VIVO* _(SofaScore / TheSportsDB / ESPN)_\n"
+        "🔹 `/live [deporte]`\n"
+        "  Marcadores en vivo ahora mismo.\n"
+        "  Deportes: `futbol` `nba` `nfl` `mlb` `tenis`\n"
+        "  _Ej:_ `/live futbol`\n\n"
+        "🔹 `/scores [deporte] [YYYY-MM-DD]`\n"
+        "  Todos los partidos del día (o fecha específica).\n"
+        "  _Ej:_ `/scores nba`  `/scores futbol 2026-03-15`\n\n"
+        "🔹 `/liveteam EQUIPO`\n"
+        "  Últimos 5 resultados + próximos partidos en vivo.\n"
+        "  _Ej:_ `/liveteam Barcelona`\n\n"
+        "🔹 `/tabla LIGA`\n"
+        "  Clasificación de la liga.\n"
+        "  Ligas: Premier League, La Liga, Bundesliga, Serie A, Ligue 1, Liga MX\n"
+        "  _Ej:_ `/tabla Bundesliga`\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "⚾ *BÉISBOL (MLB)*\n"
-        "🔹 `/mlb LOCAL vs VISITANTE`\n"
-        "  Carreras proyectadas, Pythagorean win%, over/under.\n"
-        "  _Ej:_ `/mlb Yankees vs Red Sox`\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "🏈 *FÚTBOL AMERICANO (NFL)*\n"
-        "🔹 `/nfl LOCAL vs VISITANTE`\n"
-        "  Prob. victoria, puntos proyectados, spread, over/under.\n"
-        "  _Ej:_ `/nfl Chiefs vs Eagles`\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "🎾 *TENIS (ATP/WTA)*\n"
-        "🔹 `/tennis J1 vs J2 [clay/grass/hard]`\n"
-        "  Elo-based win probability, ajuste por superficie.\n"
-        "  _Ej:_ `/tennis Djokovic vs Alcaraz clay`\n\n"
+        "🏀 `/nba H vs V` | ⚾ `/mlb H vs V` | 🏈 `/nfl H vs V`\n"
+        "🎾 `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "*Confianza:* 🟢 ALTA ≥55% | 🟡 MEDIA ≥42% | 🔴 BAJA\n"
         "*Forma:* 🔥📈➡️📉❄️\n\n"
-        "_Motor: Home/Away Split + Dixon-Coles + Monte Carlo + Decay Form + H2H + ESPN API_",
+        "_Motor: Home/Away Split + Dixon-Coles + MC + Decay Form + H2H_\n"
+        "_Fuentes: SofaScore · TheSportsDB · ESPN_",
         parse_mode="Markdown",
     )
 
@@ -302,10 +327,14 @@ async def predict(update: Update, context: ContextTypes.DEFAULT_TYPE):
     home = home_raw.strip()
     away = away_raw.strip()
 
-    await update.message.reply_text("⏳ Analizando partido…")
+    await update.message.reply_text(
+        "⏳ Analizando partido… _(buscando datos en vivo)_",
+        parse_mode="Markdown",
+    )
 
     try:
-        prediction = get_full_prediction(home, away)
+        # fetch_live=True: automatically pull live form from SofaScore / TheSportsDB
+        prediction = get_full_prediction(home, away, fetch_live=True)
         await update.message.reply_text(
             format_prediction(prediction), parse_mode="Markdown"
         )
@@ -545,25 +574,23 @@ def _format_sport_prediction(pred: dict) -> str:
 async def sports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/sports — List all available sport commands."""
     await update.message.reply_text(
-        "🏟️ *Sports Engine — Deportes disponibles*\n\n"
+        "🏟️ *Sports Engine — Todos los comandos*\n\n"
         "⚽ *Fútbol*\n"
-        "  `/predict LOCAL vs VISITANTE` — predicción completa\n"
-        "  `/value LOCAL vs VISITANTE C\\_L C\\_E C\\_V` — value bets\n"
-        "  `/stats EQUIPO` — estadísticas del equipo\n\n"
-        "🏀 *Basquetbol (NBA)*\n"
-        "  `/nba LOCAL vs VISITANTE`\n"
-        "  _Ej:_ `/nba Lakers vs Celtics`\n\n"
-        "⚾ *Béisbol (MLB)*\n"
-        "  `/mlb LOCAL vs VISITANTE`\n"
-        "  _Ej:_ `/mlb Yankees vs Red Sox`\n\n"
-        "🏈 *Fútbol Americano (NFL)*\n"
-        "  `/nfl LOCAL vs VISITANTE`\n"
-        "  _Ej:_ `/nfl Chiefs vs Eagles`\n\n"
-        "🎾 *Tenis (ATP/WTA)*\n"
-        "  `/tennis J1 vs J2 [clay/grass/hard]`\n"
-        "  _Ej:_ `/tennis Djokovic vs Alcaraz clay`\n\n"
-        "📅 `/today` — partidos de hoy en todos los deportes\n"
-        "❓ `/help` — ayuda detallada",
+        "  `/predict LOCAL vs VISITANTE`\n"
+        "  `/value LOCAL vs VISITANTE C\\_L C\\_E C\\_V`\n"
+        "  `/stats EQUIPO`\n\n"
+        "🏀 *NBA* — `/nba LOCAL vs VISITANTE`\n"
+        "⚾ *MLB* — `/mlb LOCAL vs VISITANTE`\n"
+        "🏈 *NFL* — `/nfl LOCAL vs VISITANTE`\n"
+        "🎾 *Tenis* — `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
+        "📡 *Datos en vivo*\n"
+        "  `/live [deporte]` — marcadores en vivo ahora\n"
+        "  `/scores [deporte]` — partidos de hoy\n"
+        "  `/liveteam EQUIPO` — forma + próximos partidos\n"
+        "  `/tabla LIGA` — clasificación\n\n"
+        "📅 `/today` — agenda multideporte\n"
+        "❓ `/help` — ayuda detallada\n\n"
+        "_Fuentes: SofaScore · TheSportsDB · ESPN_",
         parse_mode="Markdown",
     )
 
@@ -717,6 +744,232 @@ async def tennis(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ===============================
+# 📡 COMMANDS — Live data (SofaScore / TheSportsDB / ESPN)
+# ===============================
+
+async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /live [sport]
+    Show all currently live events.  Optional sport filter:
+      football | nba | nfl | mlb | tennis
+    Default: football.
+    """
+    sport = (context.args[0].lower() if context.args else "football")
+    sport_map = {
+        "futbol": "football", "soccer": "football",
+        "basket": "basketball", "basquet": "basketball",
+        "beisbol": "baseball", "baseball": "baseball",
+        "americano": "american-football", "nfl": "american-football",
+        "tenis": "tennis",
+    }
+    sport = sport_map.get(sport, sport)
+
+    await update.message.reply_text("⏳ Buscando partidos en vivo…")
+    try:
+        events = get_live_scores(sport)
+        sport_emoji = {
+            "football": "⚽", "basketball": "🏀", "american-football": "🏈",
+            "baseball": "⚾", "tennis": "🎾",
+        }.get(sport, "🏟️")
+
+        if not events:
+            await update.message.reply_text(
+                f"{sport_emoji} *{sport.capitalize()}*\n\n"
+                f"📭 No hay partidos en vivo en este momento.\n\n"
+                f"Prueba `/scores` para ver resultados del día.",
+                parse_mode="Markdown",
+            )
+            return
+
+        scoreboard = format_live_scoreboard(events)
+        await update.message.reply_text(
+            f"{sport_emoji} *LIVE — {sport.upper()}*\n\n{scoreboard}",
+            parse_mode="Markdown",
+        )
+    except Exception as exc:
+        logger.exception("Error en /live %s", sport)
+        await update.message.reply_text(f"❌ Error al obtener datos en vivo: {exc}")
+
+
+async def scores(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /scores [sport] [date]
+    Show today's schedule and results.
+    Optional sport (football/nba/nfl/mlb/tennis) and optional date YYYY-MM-DD.
+    """
+    args = context.args or []
+    sport = "football"
+    date = ""
+
+    for arg in args:
+        if "-" in arg and len(arg) == 10:  # YYYY-MM-DD
+            date = arg
+        else:
+            sport_map = {
+                "futbol": "football", "soccer": "football",
+                "basket": "basketball", "basquet": "basketball",
+                "nba": "basketball", "beisbol": "baseball",
+                "mlb": "baseball", "americano": "american-football",
+                "nfl": "american-football", "tenis": "tennis", "atp": "tennis",
+            }
+            sport = sport_map.get(arg.lower(), arg.lower())
+
+    await update.message.reply_text("⏳ Buscando partidos…")
+    try:
+        events = get_today_schedule(sport, date)
+        sport_emoji = {
+            "football": "⚽", "basketball": "🏀", "american-football": "🏈",
+            "baseball": "⚾", "tennis": "🎾",
+        }.get(sport, "🏟️")
+
+        label = f"{date}" if date else "hoy"
+
+        if not events:
+            await update.message.reply_text(
+                f"{sport_emoji} Sin partidos disponibles para {label}.",
+                parse_mode="Markdown",
+            )
+            return
+
+        scoreboard = format_live_scoreboard(events, max_items=20)
+        await update.message.reply_text(
+            f"{sport_emoji} *{sport.upper()} — {label}*\n\n{scoreboard}",
+            parse_mode="Markdown",
+        )
+    except Exception as exc:
+        logger.exception("Error en /scores %s", sport)
+        await update.message.reply_text(f"❌ Error al obtener partidos: {exc}")
+
+
+async def liveteam(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /liveteam EQUIPO
+    Show a team's last 5 results and next 5 fixtures from live sources
+    (SofaScore / TheSportsDB).
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso:\n`/liveteam EQUIPO`\n\nEjemplo:\n`/liveteam Real Madrid`",
+            parse_mode="Markdown",
+        )
+        return
+
+    team_name = " ".join(context.args)
+    await update.message.reply_text(f"⏳ Buscando datos de *{team_name}*…", parse_mode="Markdown")
+
+    try:
+        # Fetch live form
+        form = get_team_live_form(team_name, "football")
+        fixtures = get_next_fixtures(team_name)
+
+        if not form and not fixtures:
+            await update.message.reply_text(
+                f"📭 No se encontraron datos en vivo para *{team_name}*.\n\n"
+                f"Prueba `/stats {team_name}` para estadísticas del historial.",
+                parse_mode="Markdown",
+            )
+            return
+
+        text_parts = [f"📡 *{team_name}* — datos en vivo\n"]
+
+        if form and form.get("matches"):
+            source = form.get("source", "?").capitalize()
+            avg_scored   = form.get("attack", 0)
+            avg_conceded = form.get("defense", 0)
+            last5 = form.get("last5", "?????")
+            text_parts.append(
+                f"📈 *Últimos resultados* _{source}_\n"
+                f"  Forma: `{last5}` | Prom. `{avg_scored}` goles / `{avg_conceded}` concedidos"
+            )
+            results_str = format_last_results(form["matches"], team_name)
+            text_parts.append(results_str)
+            text_parts.append("")
+
+        if fixtures:
+            text_parts.append("📅 *Próximos partidos*")
+            text_parts.append(format_fixture_list(fixtures))
+
+        await update.message.reply_text(
+            "\n".join(text_parts), parse_mode="Markdown"
+        )
+    except Exception as exc:
+        logger.exception("Error en /liveteam %s", team_name)
+        await update.message.reply_text(f"❌ Error: {exc}")
+
+
+async def tabla(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /tabla LIGA
+    Show the league standings from TheSportsDB / SofaScore.
+    Supported: Premier League, La Liga, Bundesliga, Serie A, Ligue 1, Liga MX
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso:\n`/tabla LIGA`\n\n"
+            "Ligas disponibles:\n"
+            "  Premier League, La Liga, Bundesliga,\n"
+            "  Serie A, Ligue 1, Liga MX, Champions League",
+            parse_mode="Markdown",
+        )
+        return
+
+    league_name = " ".join(context.args).title()
+    # Normalise common abbreviations
+    aliases = {
+        "Epl": "Premier League",
+        "Pl": "Premier League",
+        "Premier": "Premier League",
+        "Liga": "La Liga",
+        "Laliga": "La Liga",
+        "Buli": "Bundesliga",
+        "Seriea": "Serie A",
+        "Ligue": "Ligue 1",
+        "Ligue1": "Ligue 1",
+        "Ligamx": "Liga MX",
+        "Mx": "Liga MX",
+        "Ucl": "Champions League",
+        "Champions": "Champions League",
+    }
+    league_name = aliases.get(league_name.replace(" ", ""), league_name)
+
+    await update.message.reply_text(f"⏳ Cargando tabla de *{league_name}*…", parse_mode="Markdown")
+
+    try:
+        table = get_league_table(league_name)
+
+        if not table:
+            await update.message.reply_text(
+                f"📭 No se encontró la tabla de *{league_name}*.\n\n"
+                f"Usa `/tabla Premier League`, `/tabla La Liga`, etc.",
+                parse_mode="Markdown",
+            )
+            return
+
+        rows = table[:20]  # top 20
+        header = f"🏆 *{league_name}*\n\n"
+        header += "`Pos  Equipo              PJ  G  E  P  GF GA Pts`\n"
+        lines = []
+        for r in rows:
+            pos  = str(r.get("position", "?")).rjust(2)
+            team = r.get("team", "?")[:18].ljust(18)
+            pj   = str(r.get("played", 0)).rjust(2)
+            w    = str(r.get("wins", 0)).rjust(2)
+            d    = str(r.get("draws", 0)).rjust(2)
+            l    = str(r.get("losses", 0)).rjust(2)
+            gf   = str(r.get("goals_for", 0)).rjust(3)
+            ga   = str(r.get("goals_against", 0)).rjust(3)
+            pts  = str(r.get("points", 0)).rjust(3)
+            lines.append(f"`{pos}. {team} {pj} {w} {d} {l} {gf} {ga} {pts}`")
+
+        await update.message.reply_text(
+            header + "\n".join(lines), parse_mode="Markdown"
+        )
+    except Exception as exc:
+        logger.exception("Error en /tabla %s", league_name)
+        await update.message.reply_text(f"❌ Error al obtener la tabla: {exc}")
+
+
+# ===============================
 # 🚀 MAIN
 # ===============================
 
@@ -753,7 +1006,13 @@ def main():
     app.add_handler(CommandHandler("nfl", nfl))
     app.add_handler(CommandHandler("tennis", tennis))
 
-    logger.info("🤖 Bot corriendo correctamente — 5 deportes activos…")
+    # ── Live data commands (SofaScore / TheSportsDB / ESPN) ──
+    app.add_handler(CommandHandler("live", live))
+    app.add_handler(CommandHandler("scores", scores))
+    app.add_handler(CommandHandler("liveteam", liveteam))
+    app.add_handler(CommandHandler("tabla", tabla))
+
+    logger.info("🤖 Bot corriendo — 5 deportes + datos en vivo (SofaScore/TheSportsDB/ESPN)…")
     app.run_polling()
 
 
