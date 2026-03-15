@@ -1,17 +1,23 @@
 import requests
 import csv
+import os
+import sys
 from pathlib import Path
 
-API_KEY = "326817dbace2d3e8eadc29be1d404a17"
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
+
+from core.config import API_SPORTS_KEY, API_SPORTS_BASE_URL
 
 headers = {
-    "x-apisports-key": API_KEY
+    "x-apisports-key": API_SPORTS_KEY
 }
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_PATH = BASE_DIR / "data" / "matches.csv"
 
-url = "https://v3.football.api-sports.io/fixtures"
+url = f"{API_SPORTS_BASE_URL}/fixtures"
 
 params = {
     "league": 262,   # Liga MX

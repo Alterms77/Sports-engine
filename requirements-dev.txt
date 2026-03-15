@@ -1,0 +1,9 @@
+# Development and testing dependencies for Sports Engine.
+# Install with:  pip install -r requirements-dev.txt
+#
+# These are NOT included in the production Docker image.
+
+-r requirements.txt
+
+pytest>=9.0
+pytest-cov>=7.0

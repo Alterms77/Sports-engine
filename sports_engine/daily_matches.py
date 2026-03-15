@@ -1,15 +1,21 @@
 import requests
+import os
+import sys
 from datetime import datetime, timedelta
 
-API_KEY = "326817dbace2d3e8eadc29be1d404a17"
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
+
+from core.config import API_SPORTS_KEY, API_SPORTS_BASE_URL, ALLOWED_LEAGUE_IDS
 
 headers = {
-    "x-apisports-key": API_KEY
+    "x-apisports-key": API_SPORTS_KEY
 }
 
-url = "https://v3.football.api-sports.io/fixtures"
+url = f"{API_SPORTS_BASE_URL}/fixtures"
 
-allowed_leagues = [262, 39, 140, 2]
+allowed_leagues = list(ALLOWED_LEAGUE_IDS.keys())
 
 
 def get_daily_matches():

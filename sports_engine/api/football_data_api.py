@@ -1,13 +1,23 @@
 import os
+import sys
 import requests
+import logging
 
-# Intentamos obtener la clave de la variable de entorno, 
-# si no existe, usamos la que proporcionaste directamente.
-API_TOKEN = os.getenv("FOOTBALL_DATA_TOKEN") or "326817dbace2d3e8eadc29be1d404a17"
+logger = logging.getLogger(__name__)
+
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_SPORTS_ENGINE_DIR = os.path.dirname(_THIS_DIR)
+if _SPORTS_ENGINE_DIR not in sys.path:
+    sys.path.insert(0, _SPORTS_ENGINE_DIR)
+
+from core.config import API_SPORTS_KEY
+
+# Football-Data.org uses the same key via the TOKEN env var as a fallback
+API_TOKEN = os.getenv("FOOTBALL_DATA_TOKEN") or API_SPORTS_KEY
 BASE_URL = "https://api.football-data.org/v4"
 
 if not API_TOKEN:
-    raise RuntimeError("API token no encontrado")
+    logger.warning("No football-data API token found; football_data_api will be unavailable")
 
 headers = {
     "X-Auth-Token": API_TOKEN
@@ -46,8 +56,8 @@ def get_matches(competition_code, season=None, date_from=None, date_to=None):
         return data.get("matches", [])
 
     except requests.exceptions.HTTPError as e:
-        print("Error en la API:", e)
-        print("Respuesta de la API:", r.text)
+        logger.error("Error en la API: %s", e)
+        logger.error("Respuesta de la API: %s", r.text)
         return []
 
 # --- Ejemplo de uso ---

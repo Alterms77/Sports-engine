@@ -1,25 +1,34 @@
 import requests
 import csv
+import logging
 import os
+import sys
+
 from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
+
+# Allow running from repo root or from sports_engine/
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
+
+from core.config import API_SPORTS_KEY, API_SPORTS_BASE_URL, ALLOWED_LEAGUE_IDS
 
 
 def update_matches():
 
-    API_KEY = "326817dbace2d3e8eadc29be1d404a17"
+    if not API_SPORTS_KEY:
+        logger.warning("API_SPORTS_KEY not set – skipping live match update")
+        return
 
     headers = {
-        "x-apisports-key": API_KEY
+        "x-apisports-key": API_SPORTS_KEY
     }
 
-    url = "https://v3.football.api-sports.io/fixtures"
+    url = f"{API_SPORTS_BASE_URL}/fixtures"
 
-    allowed_leagues = {
-        262: "Liga MX",
-        39: "Premier League",
-        140: "La Liga",
-        2: "Champions League"
-    }
+    allowed_leagues = ALLOWED_LEAGUE_IDS
 
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     DATA_PATH = os.path.join(BASE_DIR, "data", "today_matches.csv")
@@ -36,7 +45,7 @@ def update_matches():
 
         data = r.json()
 
-        for m in data["response"]:
+        for m in data.get("response", []):
 
             league_id = m["league"]["id"]
 
@@ -61,4 +70,4 @@ def update_matches():
         for m in matches:
             writer.writerow(m)
 
-    print("✅ Partidos actualizados:", len(matches))
+    logger.info("Partidos actualizados: %d", len(matches))
