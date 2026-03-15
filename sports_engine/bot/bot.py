@@ -1,10 +1,11 @@
 import os
+import re
 import sys
 import csv
 import logging
 import threading
 import time as _time
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 # Allow importing from sports_engine/ regardless of working directory
@@ -23,6 +24,8 @@ from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
+    MessageHandler,
+    filters,
     ContextTypes,
 )
 
@@ -67,8 +70,10 @@ logger = logging.getLogger(__name__)
 
 DATA_PATH = os.path.join(_SPORTS_ENGINE_DIR, "data", "today_matches.csv")
 
-# TTL (seconds) between automatic CSV refreshes for /today
-MATCHES_UPDATE_TTL = 900  # 15 minutes
+# TTL (seconds) between automatic CSV refreshes.
+# 10 minutes keeps soccer fixtures fresh throughout the day so that games
+# which start or finish during the window are cleaned out quickly.
+MATCHES_UPDATE_TTL = 600  # 10 minutes
 
 # State for CSV refresh scheduling
 _matches_lock = threading.Lock()
@@ -95,7 +100,24 @@ def _refresh_matches_if_stale() -> None:
 
 
 def load_today_matches():
+    """Load upcoming soccer matches from the local CSV.
+
+    Filters applied at read time (defensive double-check):
+    - ``date`` column must equal today's date.
+    - ``status`` column (if present) must indicate a not-started game.
+    - ``kickoff_utc`` column (if present) must be in the future.
+
+    These filters mirror what ``update_matches()`` applies when writing, so
+    stale rows left over from a previous run of the update job are discarded
+    automatically without requiring a CSV rewrite.
+    """
     matches = []
+    _now_utc = datetime.now(timezone.utc)
+    today    = _now_utc.strftime("%Y-%m-%d")
+    now_utc  = _now_utc.replace(tzinfo=None)  # naive UTC for comparison
+
+    # API-Sports status codes that mean the game has not yet kicked off
+    _pending = {"NS", "TBD", "PST", "SUSP", "INT"}
 
     if not os.path.exists(DATA_PATH):
         logger.warning("Archivo no encontrado: %s", DATA_PATH)
@@ -105,13 +127,90 @@ def load_today_matches():
         with open(DATA_PATH, newline="", encoding="utf-8") as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
+                # Date filter
+                row_date = row.get("date", "").strip()
+                if row_date and row_date != today:
+                    continue
+
+                # Status filter: skip live / finished games
+                status = row.get("status", "NS").strip()
+                if status and status not in _pending:
+                    continue
+
+                # Kickoff time filter: skip games already past kick-off
+                kickoff_str = row.get("kickoff_utc", "").strip()
+                if kickoff_str:
+                    try:
+                        # normalise to a naive UTC datetime for comparison
+                        kickoff_dt = datetime.fromisoformat(
+                            kickoff_str.replace("Z", "+00:00")
+                        )
+                        if kickoff_dt.tzinfo is not None:
+                            kickoff_dt = kickoff_dt.astimezone(timezone.utc).replace(tzinfo=None)
+                        if kickoff_dt <= now_utc:
+                            continue
+                    except (ValueError, TypeError):
+                        pass  # keep if unparseable
+
                 matches.append({
                     "home": row["home"].strip(),
                     "away": row["away"].strip(),
                     "league": row.get("league", "").strip(),
+                    "sport": "soccer",
                 })
     except Exception as e:
         logger.error("Error al cargar partidos: %s", e)
+
+    return matches
+
+
+def load_today_matches_multisport() -> list:
+    """Return a unified list of upcoming today's matches across Soccer, NBA, NFL, and MLB.
+
+    Only games that have **not yet started** are included so that `/parlay`
+    never produces picks for games already in progress or finished.
+
+    Sources
+    -------
+    - Soccer : local ``today_matches.csv`` (API-Sports, filtered to upcoming)
+    - NBA / NFL / MLB : ESPN public scoreboard API (no key required)
+
+    Each item in the returned list has at minimum:
+      ``sport``, ``home``, ``away``, ``league``
+    """
+    matches: list = []
+
+    # ── Soccer from local CSV (already filtered to upcoming games) ─────────
+    matches.extend(load_today_matches())
+
+    # ── NBA / NFL / MLB from ESPN ──────────────────────────────────────────
+    # ESPN status strings that indicate a game has not yet started.
+    _espn_scheduled = {"Scheduled", "Pregame", "Pre-Game"}
+
+    try:
+        from api.espn_api import get_scoreboard
+        for sport in ("nba", "nfl", "mlb"):
+            try:
+                games = get_scoreboard(sport)
+                for g in games:
+                    status = g.get("status", "Scheduled")
+                    if status not in _espn_scheduled:
+                        # Game is live or finished — skip for parlay purposes
+                        logger.debug(
+                            "Multisport loader: skipping %s vs %s (%s) — status: %s",
+                            g["home"], g["away"], sport, status,
+                        )
+                        continue
+                    matches.append({
+                        "home": g["home"],
+                        "away": g["away"],
+                        "league": sport.upper(),
+                        "sport": sport,
+                    })
+            except Exception as exc:
+                logger.warning("ESPN scoreboard unavailable for %s: %s", sport, exc)
+    except Exception as exc:
+        logger.warning("ESPN API import failed: %s", exc)
 
     return matches
 
@@ -356,7 +455,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚾ MLB: `/mlb LOCAL vs VISITANTE`\n"
         "🏈 NFL: `/nfl LOCAL vs VISITANTE`\n"
         "🎾 Tenis: `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
-        "🎰 Parlays: `/parlay` — parlays confiables del día\n\n"
+        "🎰 Parlays: `/parlay` — parlays confiables del día\n"
+        "🎯 Parlay Safe: `/parlay_safe` — máximo hit rate (2-3 patas, moneyline)\n"
+        "📸 Analizar tu parlay: `/checkparlay` o envía una *foto* con caption\n"
+        "📋 Reportar resultado: `/resultado <id> WLW`\n"
+        "📊 Historial & calibración: `/historial`\n"
+        "🧠 Estadísticas detalladas: `/estadisticas`\n\n"
         "🔬 *Analytics avanzados*\n"
         "  `/form EQUIPO` · `/intel L vs V` · `/markets L vs V`\n"
         "  `/bayes L vs V` · `/referee ÁRBITRO` · `/weather`\n"
@@ -405,7 +509,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  Modelos de mercado completos: O/U 0.5-4.5, Asian\n"
         "  Handicap -2.5→+2.5, HT/FT, CS, DNB, Double Chance.\n"
         "  _Ej:_ `/markets Liverpool vs Arsenal`\n\n"
-        "🎰 `/parlay` — parlays confiables del día\n\n"
+        "🎰 `/parlay` — parlays confiables del día\n"
+        "🎯 `/parlay_safe` — parlay de máximo hit rate (2-3 patas, moneyline, filtros estrictos)\n"
+        "📸 `/checkparlay <patas>` — analiza tu parlay propio\n"
+        "  _Envía también una foto con el caption de las patas_\n"
+        "  _Ej:_ `/checkparlay Burnley vs Bournemouth Over 2.5 @1.75; Lakers vs Warriors @2.10`\n"
+        "📋 `/resultado [<id>] <WLWWL>` — reporta el resultado de un parlay\n"
+        "  _Ej:_ `/resultado P240315-2 WLW` · W=Ganó L=Perdió X=Cancelado\n"
+        "📊 `/historial` — historial, tasas de acierto y calibración automática\n"
+        "🧠 `/estadisticas` — calibración por deporte, liga, mercado y bucket de prob\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "🔍 *UNIVERSAL MARKET ERROR SCANNER*\n"
         "🔹 `/scanodds EVENTO | MERCADO | cuota@casa...`\n"
@@ -1278,13 +1390,17 @@ async def tabla(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generate parlay recommendations from today's matches."""
+    """Generate parlay recommendations from today's matches (Soccer + NBA/NFL/MLB)."""
     await update.message.reply_text(
         "🎰 Generando parlays del día…",
         parse_mode="Markdown",
     )
 
-    matches = load_today_matches()
+    # ── Refresh soccer CSV if stale ────────────────────────────────────────
+    _refresh_matches_if_stale()
+
+    # ── Load today's matches across all supported sports ──────────────────
+    matches = load_today_matches_multisport()
     if not matches:
         await update.message.reply_text(
             "❌ No hay partidos cargados para hoy.\nUsa `/today` para verificar.",
@@ -1292,17 +1408,29 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ── Run predictions for every match using the correct sport module ────
     predictions = []
     for m in matches:
+        sport = m.get("sport", "soccer").lower()
+        home, away = m["home"], m["away"]
         try:
-            pred = get_full_prediction(
-                m["home"], m["away"],
-                league=m.get("league", "default"),
-                fetch_live=True,
-            )
+            if sport == "nba":
+                pred = _bball.predict_game(home, away)
+            elif sport == "nfl":
+                pred = _nfl.predict_game(home, away)
+            elif sport == "mlb":
+                pred = _baseball.predict_game(home, away)
+            else:
+                # Soccer / football
+                pred = get_full_prediction(
+                    home, away,
+                    league=m.get("league", "default"),
+                    fetch_live=True,
+                )
+            pred.setdefault("league", m.get("league", ""))
             predictions.append(pred)
         except Exception as e:
-            logger.warning("Parlay: skip %s vs %s: %s", m["home"], m["away"], e)
+            logger.warning("Parlay: skip %s vs %s (%s): %s", home, away, sport, e)
 
     if not predictions:
         await update.message.reply_text(
@@ -1310,18 +1438,395 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ── Build parlays: only ALTA confidence, ≥ 75 % probability ──────────
     from core.parlay import generate_parlay_legs, build_parlays, format_parlay
-    legs = generate_parlay_legs(predictions)
+    from core.parlay_history import save_parlay as _save_parlay, get_calibration_stats
+
+    # Pre-load calibration stats once so generate_parlay_legs doesn't query DB per leg
+    try:
+        cal_stats = get_calibration_stats()
+    except Exception:
+        cal_stats = {}
+
+    legs, report, _excluded = generate_parlay_legs(
+        predictions,
+        min_confidence="ALTA",
+        min_prob=75.0,
+        cal_stats=cal_stats,
+    )
+
     if len(legs) < 2:
+        total = report.get("total_candidates", len(predictions))
+        excl  = report.get("exclusions", {})
+        excl_str = ", ".join(f"{k}={v}" for k, v in sorted(excl.items())) if excl else "ninguno"
         await update.message.reply_text(
-            "⚠️ No hay suficientes picks confiables para armar un parlay hoy."
+            "⚠️ No hay suficientes picks de alta confianza para armar un parlay hoy.\n"
+            f"_(Analizados: {total} | Excluidos: {excl_str})_",
+            parse_mode="Markdown",
         )
         return
 
     parlays = build_parlays(legs)
-    text = format_parlay(parlays)
+
+    # ── Save to history (use the most ambitious tier's legs & prob) ───────
+    try:
+        # Determine the "main" tier to save: prefer balanced, else safe
+        for tier_key in ("balanced", "safe", "risky"):
+            tier_data = parlays.get(tier_key)
+            if tier_data:
+                parlay_id = _save_parlay(
+                    tier_data["legs"],
+                    tier_key,
+                    tier_data["combined_prob"],
+                )
+                break
+        else:
+            parlay_id = ""
+    except Exception as exc:
+        logger.warning("parlay_command: could not save to history: %s", exc)
+        parlay_id = ""
+
+    text = format_parlay(
+        parlays,
+        parlay_id=parlay_id,
+        report=report,
+    )
     await update.message.reply_text(text, parse_mode="Markdown")
 
+
+async def parlay_safe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /parlay_safe
+
+    Generate a maximum hit-rate parlay (2-3 legs) using conservative filters:
+      * Moneyline / 1X2 markets only
+      * Clarity criterion: p_best ≥ 62 % and separation ≥ 12 pp
+      * Stricter risk threshold (0.25 vs 0.35 for default)
+      * No variety cap — best global picks win regardless of sport
+      * Calibration clamped to [50 %, 90 %]
+    """
+    await update.message.reply_text(
+        "🎯 Generando Parlay Safe (máximo hit rate)…",
+        parse_mode="Markdown",
+    )
+
+    # ── Refresh soccer CSV if stale ────────────────────────────────────────
+    _refresh_matches_if_stale()
+
+    # ── Load today's matches across all supported sports ──────────────────
+    matches = load_today_matches_multisport()
+    if not matches:
+        await update.message.reply_text(
+            "❌ No hay partidos cargados para hoy.\nUsa `/today` para verificar.",
+            parse_mode="Markdown",
+        )
+        return
+
+    # ── Run predictions ───────────────────────────────────────────────────
+    predictions = []
+    for m in matches:
+        sport = m.get("sport", "soccer").lower()
+        home, away = m["home"], m["away"]
+        try:
+            if sport == "nba":
+                pred = _bball.predict_game(home, away)
+            elif sport == "nfl":
+                pred = _nfl.predict_game(home, away)
+            elif sport == "mlb":
+                pred = _baseball.predict_game(home, away)
+            else:
+                pred = get_full_prediction(
+                    home, away,
+                    league=m.get("league", "default"),
+                    fetch_live=True,
+                )
+            pred.setdefault("league", m.get("league", ""))
+            predictions.append(pred)
+        except Exception as e:
+            logger.warning("ParlayS: skip %s vs %s (%s): %s", home, away, sport, e)
+
+    if not predictions:
+        await update.message.reply_text(
+            "❌ No se pudieron generar predicciones para los partidos de hoy."
+        )
+        return
+
+    from core.parlay import generate_parlay_legs, format_parlay_safe
+    from core.parlay_history import save_parlay as _save_parlay, get_calibration_stats
+
+    # Pre-load calibration stats once
+    try:
+        cal_stats = get_calibration_stats()
+    except Exception:
+        cal_stats = {}
+
+    legs, report, _excluded = generate_parlay_legs(
+        predictions,
+        max_legs=3,
+        min_confidence="ALTA",
+        min_prob=62.0,
+        safe_mode=True,
+        cal_stats=cal_stats,
+    )
+
+    # ── Save to history ────────────────────────────────────────────────────
+    parlay_id = ""
+    if legs:
+        try:
+            combined = 1.0
+            for leg in legs:
+                combined *= leg["prob"] / 100.0
+            parlay_id = _save_parlay(legs, "safe", round(combined * 100, 1))
+        except Exception as exc:
+            logger.warning("parlay_safe_command: could not save to history: %s", exc)
+
+    text = format_parlay_safe(legs, report, parlay_id=parlay_id)
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+# ── Parlay photo / text analyzer ─────────────────────────────────────────────
+
+
+async def photo_parlay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle photos sent to the bot as parlay ticket images.
+
+    The bot reads the photo's *caption* and parses it as parlay legs text.
+    If no caption is provided, usage instructions are returned.
+
+    Caption format (one leg per line):
+        Burnley vs Bournemouth | Over 2.5 | @1.75
+        Lakers vs Warriors | Moneyline | @2.10
+        Real Madrid vs Barcelona | Victoria Real Madrid | 1.45
+    """
+    caption = (update.message.caption or "").strip()
+
+    if not caption:
+        from core.parlay_analyzer import USAGE_TEXT
+        await update.message.reply_text(USAGE_TEXT, parse_mode="MarkdownV2")
+        return
+
+    await update.message.reply_text("🔍 Analizando tu parlay…", parse_mode="Markdown")
+
+    try:
+        from core.parlay_analyzer import (
+            parse_parlay_text,
+            analyze_parlay,
+            format_parlay_analysis,
+            USAGE_TEXT,
+        )
+        legs = parse_parlay_text(caption)
+        if not legs:
+            await update.message.reply_text(
+                "❌ No pude detectar patas de parlay en el caption\\.\n\n"
+                + USAGE_TEXT,
+                parse_mode="MarkdownV2",
+            )
+            return
+
+        analysis = analyze_parlay(legs)
+        await update.message.reply_text(
+            format_parlay_analysis(analysis), parse_mode="MarkdownV2"
+        )
+    except Exception as exc:
+        logger.exception("Error en análisis de parlay (foto)")
+        await update.message.reply_text(f"❌ Error al analizar el parlay: {exc}")
+
+
+async def checkparlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /checkparlay <parlay legs>
+
+    Analyze a parlay described in text. Separate legs with newlines or
+    semicolons. Include decimal or American odds for implied-probability
+    calculation; if omitted the prediction model is used as a fallback.
+
+    Examples
+    --------
+    /checkparlay Burnley vs Bournemouth Over 2.5 @1.75; Lakers vs Warriors @2.10
+    /checkparlay Real Madrid vs Barcelona | Victoria Real Madrid | 1.45
+    """
+    if not context.args:
+        from core.parlay_analyzer import USAGE_TEXT
+        await update.message.reply_text(
+            "❌ Uso: `/checkparlay <patas del parlay>`\n\n" + USAGE_TEXT,
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    raw_text = " ".join(context.args)
+    await update.message.reply_text("🔍 Analizando tu parlay…", parse_mode="Markdown")
+
+    try:
+        from core.parlay_analyzer import (
+            parse_parlay_text,
+            analyze_parlay,
+            format_parlay_analysis,
+            USAGE_TEXT,
+        )
+        legs = parse_parlay_text(raw_text)
+        if not legs:
+            await update.message.reply_text(
+                "❌ No pude parsear las patas del parlay\\.\n\n" + USAGE_TEXT,
+                parse_mode="MarkdownV2",
+            )
+            return
+
+        analysis = analyze_parlay(legs)
+        await update.message.reply_text(
+            format_parlay_analysis(analysis), parse_mode="MarkdownV2"
+        )
+    except Exception as exc:
+        logger.exception("Error en /checkparlay")
+        await update.message.reply_text(f"❌ Error al analizar el parlay: {exc}")
+
+
+# ── Parlay result recording and history ──────────────────────────────────────
+
+
+async def resultado_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /resultado [<id>] <WLWWL>
+
+    Record the outcome of each leg in a previously generated parlay.
+
+    - ``W`` = ganó (won)
+    - ``L`` = perdió (lost)
+    - ``X`` = cancelado / void
+
+    If ``<id>`` is omitted the most recently generated parlay is used.
+
+    Examples
+    --------
+    /resultado P240315-2 WLW
+    /resultado WWL        ← uses the last parlay
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso: `/resultado [<id>] <WLWWL>`\n\n"
+            "Ejemplo: `/resultado P240315-2 WLW`\n"
+            "O para el último parlay: `/resultado WWL`\n\n"
+            "W = Ganó · L = Perdió · X = Cancelado",
+            parse_mode="Markdown",
+        )
+        return
+
+    from core.parlay_history import (
+        record_results,
+        get_last_parlay_id,
+        get_num_legs_for_parlay,
+        format_result_confirmation,
+        PARLAY_ID_RE,
+    )
+
+    args = context.args
+
+    # Determine whether first arg is a parlay ID or result string
+    if len(args) >= 2 and PARLAY_ID_RE.match(args[0]):
+        parlay_id   = args[0].upper()
+        results_str = "".join(args[1:]).upper()
+    else:
+        # No ID — use last generated parlay
+        parlay_id = get_last_parlay_id() or ""
+        results_str = "".join(args).upper()
+
+    if not parlay_id:
+        await update.message.reply_text(
+            "❌ No hay parlays guardados aún. Genera uno con `/parlay` primero.",
+            parse_mode="Markdown",
+        )
+        return
+
+    # Validate result chars
+    invalid = [c for c in results_str if c not in ("W", "L", "X")]
+    if invalid or not results_str:
+        await update.message.reply_text(
+            f"❌ Formato inválido: `{results_str}`\n\n"
+            "Solo se aceptan W (ganó), L (perdió) y X (cancelado).\n"
+            "Ejemplo: `WLW` para 3 patas (1ª ganó, 2ª perdió, 3ª ganó).",
+            parse_mode="Markdown",
+        )
+        return
+
+    # Validate result count vs number of legs in the parlay
+    num_legs = get_num_legs_for_parlay(parlay_id)
+    if num_legs > 0 and len(results_str) < num_legs:
+        await update.message.reply_text(
+            f"⚠️ Recibí `{len(results_str)}/{num_legs}` resultado(s) — "
+            f"faltan `{num_legs - len(results_str)}` pata(s).\n\n"
+            f"Envía los {num_legs} resultados juntos: "
+            f"`/resultado {parlay_id} {'W'*num_legs}`\n"
+            "_Una letra por pata: W=Ganó, L=Perdió, X=Cancelado_",
+            parse_mode="Markdown",
+        )
+        return
+
+    results_list = list(results_str)
+    outcome = record_results(parlay_id, results_list)
+
+    if not outcome["found"]:
+        await update.message.reply_text(
+            f"❌ Parlay `{parlay_id}` no encontrado.\n"
+            "Usa `/historial` para ver los IDs guardados.",
+            parse_mode="Markdown",
+        )
+        return
+
+    await update.message.reply_text(
+        format_result_confirmation(outcome), parse_mode="Markdown"
+    )
+
+
+async def historial_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /historial
+
+    Show recent parlay history, win rate, and calibration statistics.
+    The calibration data is used automatically by future /parlay calls to
+    adjust predicted probabilities toward observed hit rates.
+    """
+    try:
+        from core.parlay_history import (
+            get_history,
+            get_calibration_stats,
+            format_history_summary,
+        )
+        records   = get_history(limit=15)
+        cal_stats = get_calibration_stats()
+        text      = format_history_summary(records, cal_stats)
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as exc:
+        logger.exception("Error en /historial")
+        await update.message.reply_text(f"❌ Error al obtener historial: {exc}")
+
+
+async def estadisticas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /estadisticas
+
+    Show deep analytics: model calibration by sport, league, and market type,
+    plus sparkline trend and probability-bucket hit rates.  The model
+    automatically applies these statistics to improve future /parlay estimates.
+    """
+    try:
+        from core.parlay_history import (
+            get_calibration_stats,
+            get_sport_stats,
+            get_league_stats,
+            get_trend,
+            get_bucket_stats,
+            format_estadisticas,
+        )
+        cal_stats    = get_calibration_stats()
+        sport_stats  = get_sport_stats()
+        league_stats = get_league_stats()
+        trend        = get_trend(n_last=20)
+        bucket_stats = get_bucket_stats()
+        text         = format_estadisticas(cal_stats, sport_stats, league_stats,
+                                           trend, bucket_stats)
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as exc:
+        logger.exception("Error en /estadisticas")
+        await update.message.reply_text(f"❌ Error al obtener estadísticas: {exc}")
 
 
 # ===============================
@@ -2508,7 +3013,16 @@ def main():
     app.add_handler(CommandHandler("predict", predict))
     app.add_handler(CommandHandler("value", value))
     app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(CommandHandler("parlay", parlay_command))
+    app.add_handler(CommandHandler("parlay",       parlay_command))
+    app.add_handler(CommandHandler("parlay_safe",  parlay_safe_command))
+
+    # ── Parlay photo analyzer, text checker, result recorder, history ──
+    app.add_handler(CommandHandler("checkparlay",   checkparlay_command))
+    app.add_handler(CommandHandler("resultado",     resultado_command))
+    app.add_handler(CommandHandler("historial",     historial_command))
+    app.add_handler(CommandHandler("estadisticas",  estadisticas_command))
+    # PHOTO handler must come after CommandHandlers
+    app.add_handler(MessageHandler(filters.PHOTO, photo_parlay_handler))
 
     # ── Advanced analytics commands ──
     app.add_handler(CommandHandler("form",    form_command))

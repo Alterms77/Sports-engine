@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
@@ -202,11 +203,10 @@ async def scan_once() -> List[ScanAlert]:
     This coroutine is designed to be called from the bot's ``auto_scan_job``.
     It is safe to call concurrently — a non-blocking lock prevents double-runs.
     """
-    from core.config import (
-        ODDS_API_KEY,
-        AUTO_SCAN_MIN_EV,
-        AUTO_SCAN_DEDUP_TTL,
-    )
+    # Read config values fresh at call time so that env vars added after
+    # startup (e.g. via Railway dashboard + redeploy) are always picked up.
+    odds_api_key = os.environ.get("ODDS_API_KEY", "")
+    from core.config import AUTO_SCAN_MIN_EV, AUTO_SCAN_DEDUP_TTL
     from core.market_scanner import scan_multiple_markets, format_alert
     from core.arbitrage import find_arbitrage, format_arb_alert
     from core.steam_detector import OddsSnapshot, detect_steam, format_steam_alert
@@ -219,7 +219,7 @@ async def scan_once() -> List[ScanAlert]:
     async with _scan_lock:
         return await asyncio.get_event_loop().run_in_executor(
             None, _scan_once_sync,
-            ODDS_API_KEY, AUTO_SCAN_MIN_EV, AUTO_SCAN_DEDUP_TTL,
+            odds_api_key, AUTO_SCAN_MIN_EV, AUTO_SCAN_DEDUP_TTL,
         )
 
 
@@ -390,10 +390,10 @@ def _scan_once_sync(
 
 def status_summary() -> str:
     """Return a Markdown status block for the /autoscan command."""
-    from core.config import (
-        ODDS_API_KEY, AUTO_SCAN_INTERVAL, AUTO_SCAN_MIN_EV,
-        AUTO_SCAN_DEDUP_TTL,
-    )
+    # Read ODDS_API_KEY fresh from the environment at call time so that the
+    # status always reflects the current value (e.g. after a Railway redeploy).
+    odds_api_key = os.environ.get("ODDS_API_KEY", "")
+    from core.config import AUTO_SCAN_INTERVAL, AUTO_SCAN_MIN_EV, AUTO_SCAN_DEDUP_TTL
     try:
         from api.odds_api import get_quota_remaining
         quota = get_quota_remaining()
@@ -401,7 +401,7 @@ def status_summary() -> str:
     except Exception:
         quota_str = "_n/a_"
 
-    key_status = "✅ Configurada" if ODDS_API_KEY else "⚠️ No configurada (sin cuotas reales)"
+    key_status = "✅ Configurada" if odds_api_key else "⚠️ No configurada (sin cuotas reales)"
     seen_count = len(_seen)
 
     return (

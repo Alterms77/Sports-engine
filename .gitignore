@@ -24,3 +24,4 @@ env/
 
 # Data exports / temp
 *.xlsx
+sports_engine/data/parlay_history.db
