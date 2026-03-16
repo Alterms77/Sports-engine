@@ -415,16 +415,16 @@ def _build_recommendations(legs: list, combined_prob: Optional[float]) -> list:
     if combined_prob is not None:
         if combined_prob < 10:
             recs.append(
-                "🚨 Prob. combinada *muy baja* (<10%). "
+                "🚨 Prob combinada *muy baja* (menos de 10%). "
                 "Apuesta solo lo que estés dispuesto a perder."
             )
         elif combined_prob >= 60:
-            recs.append("✅ Buena combinación — prob. combinada sólida.")
+            recs.append("✅ Buena combinación — prob combinada sólida.")
 
     # Too many legs
     if n > 4 and combined_prob is not None and combined_prob < 20:
         recs.append(
-            "💡 Con 5+ patas la prob. combinada cae rápido. "
+            "💡 Con 5+ patas la prob combinada cae rápido. "
             "Considera una versión de 2-3 patas con las más confiables."
         )
 
@@ -452,7 +452,11 @@ def _build_recommendations(legs: list, combined_prob: Optional[float]) -> list:
 
 
 def _esc(text: str) -> str:
-    """Minimal Markdown escaping for team/pick names."""
+    """Escape Markdown v1 special characters in user-provided strings.
+
+    In regular Markdown (v1) only `_` and `*` need escaping inside
+    bold/italic spans to avoid breaking the formatting.
+    """
     return text.replace("_", r"\_").replace("*", r"\*")
 
 
@@ -464,6 +468,9 @@ _LEG_NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"
 def format_parlay_analysis(analysis: dict) -> str:
     """
     Format a parlay analysis dict into a Telegram Markdown message.
+
+    Uses regular Markdown (v1) to avoid MarkdownV2 escaping complexity.
+    Dynamic content (team names, pick labels) is escaped with ``_esc()``.
 
     Parameters
     ----------
@@ -488,18 +495,18 @@ def format_parlay_analysis(analysis: dict) -> str:
         num = _LEG_NUMBERS[i] if i < len(_LEG_NUMBERS) else f"{i + 1}."
         prob = leg.get("prob")
         prob_str = f" `{prob}%`" if prob is not None else " `?%`"
-        source   = " _\\[modelo\\]_" if leg.get("prob_source") == "model" else ""
+        source   = " _[modelo]_" if leg.get("prob_source") == "model" else ""
         lines.append(f"  {num} *{_esc(leg['match'])}*")
         lines.append(f"       Pick: _{_esc(leg['pick'])}_{prob_str}{source}")
 
     lines.append("")
 
     if combined_prob is not None:
-        lines.append(f"📊 *Prob. combinada:* `{combined_prob}%`")
+        lines.append(f"📊 *Prob combinada:* `{combined_prob}%`")
     else:
-        lines.append("📊 *Prob. combinada:* `?` _(incluye cuotas para calcular)_")
+        lines.append("📊 *Prob combinada:* `?` _(incluye cuotas para calcular)_")
 
-    lines.append(f"⚠️ *Nivel de riesgo:* {risk_emoji} *{risk_label}*")
+    lines.append(f"⚠️ *Nivel de riesgo:* {risk_emoji} *{_esc(risk_label)}*")
     lines.append("")
 
     if recs:
@@ -509,7 +516,7 @@ def format_parlay_analysis(analysis: dict) -> str:
             lines.append(rec)
         lines.append("")
 
-    lines.append("⚠️ _Análisis recreativo\\. Apuesta responsablemente\\._")
+    lines.append("⚠️ _Análisis recreativo. Apuesta responsablemente._")
     return "\n".join(lines)
 
 
@@ -519,13 +526,13 @@ USAGE_TEXT = (
     "📸 *Análisis de Parlay por Foto o Texto*\n\n"
     "Envía la foto de tu ticket con un *caption* describiendo cada pata. "
     "O usa el comando `/checkparlay`.\n\n"
-    "*Formatos aceptados \\(una pata por línea\\):*\n"
+    "*Formatos aceptados (una pata por línea):*\n"
     "```\n"
     "Burnley vs Bournemouth | Over 2.5 | @1.75\n"
     "Lakers vs Warriors | Moneyline | @2.10\n"
     "Real Madrid vs Barcelona | Victoria Real Madrid | 1.45\n"
     "Chiefs vs Patriots spread +110\n"
     "```\n\n"
-    "Si incluyes las cuotas \\(odds\\) calculamos la prob\\. implícita\\. "
-    "Si no, intentamos usar nuestro modelo de predicción\\."
+    "Si incluyes las cuotas (odds) calculamos la prob implícita. "
+    "Si no, intentamos usar nuestro modelo de predicción."
 )

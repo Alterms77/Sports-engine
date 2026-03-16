@@ -213,7 +213,9 @@ def predict_game(home_name: str, away_name: str) -> dict:
     away_ppg = _extract_ppg(away_stats, NBA_AVG_PPG)
     away_oppg = _extract_oppg(away_stats, NBA_AVG_OPPG)
 
-    league_avg = (home_ppg + away_ppg) / 2
+    # Use the fixed league average so offensive/defensive strengths are
+    # measured against the whole league, not just these two teams.
+    league_avg = NBA_AVG_PPG
 
     # Offensive and defensive strengths relative to league average
     home_off = home_ppg - league_avg       # positive = above-average offense
@@ -221,7 +223,20 @@ def predict_game(home_name: str, away_name: str) -> dict:
     away_off = away_ppg - league_avg
     away_def = league_avg - away_oppg
 
-    expected_margin = (home_off + home_def) - (away_off + away_def) + NBA_HOME_ADV
+    # Win-record quality adjustment: teams with a better win% get a bonus.
+    # Coefficient: a 50 pp win-rate gap (e.g. 0.75 vs 0.25) shifts the
+    # expected margin by ~2.4 pts (0.50 × 12.2 × 0.4), which is roughly
+    # 20 % of the average home-court advantage — a reasonable signal weight
+    # when season stats alone don't fully separate the teams.
+    home_win_pct = home_stats.get("win_pct", 0.5)
+    away_win_pct = away_stats.get("win_pct", 0.5)
+    win_quality_adj = (home_win_pct - away_win_pct) * NBA_SIGMA * 0.4
+
+    expected_margin = (
+        (home_off + home_def) - (away_off + away_def)
+        + NBA_HOME_ADV
+        + win_quality_adj
+    )
 
     home_win_prob = round(_normal_cdf(expected_margin / NBA_SIGMA) * 100, 1)
     away_win_prob = round(100 - home_win_prob, 1)
@@ -270,6 +285,8 @@ def predict_game(home_name: str, away_name: str) -> dict:
         "home_oppg": round(home_oppg, 1),
         "away_ppg": round(away_ppg, 1),
         "away_oppg": round(away_oppg, 1),
+        "home_win_pct": round(home_win_pct, 3),
+        "away_win_pct": round(away_win_pct, 3),
         "quarter_projections": quarters,
         "player_props": player_props,
         "game_totals": game_totals,

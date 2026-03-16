@@ -676,11 +676,11 @@ class TestCalibrateProbGated:
         assert cal_p >= 50.0
 
     def test_safe_mode_upper_clamp(self):
-        # With factor=1.5 (extreme) prob should be clamped to 90 in safe mode
+        # With factor=1.5 (extreme) prob should be clamped to _CAL_SAFE_MAX in safe mode
         stats = {"moneyline": {"n": 150, "predicted": 60.0, "hit_rate": 90.0,
                                "calibration": 1.50, "bias": "UNDERCONFIDENT"}}
         cal_p, _, _ = calibrate_prob_gated(80.0, "moneyline", stats, safe_mode=True)
-        assert cal_p <= 90.0
+        assert cal_p <= 92.0
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

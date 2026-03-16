@@ -188,7 +188,9 @@ def predict_game(home_name: str, away_name: str) -> dict:
     home_rpg = _extract_rpg(home_stats, MLB_AVG_RPG)
     away_rpg = _extract_rpg(away_stats, MLB_AVG_RPG)
 
-    league_avg = (home_rpg + away_rpg) / 2
+    # Use fixed league average so offensive strength is measured against
+    # the full MLB baseline, not just these two teams.
+    league_avg = MLB_AVG_RPG
 
     # Offensive strength relative to league average
     home_off_str = home_rpg / max(league_avg, 0.1)
@@ -212,6 +214,16 @@ def predict_game(home_name: str, away_name: str) -> dict:
 
     xr_home = round(max(xr_home, 0.5), 2)
     xr_away = round(max(xr_away, 0.5), 2)
+
+    # Win-record quality adjustment: win% difference shifts expected runs.
+    # Coefficient 0.3 means a 50 pp win-rate gap adjusts xR by ±0.68 runs
+    # (0.50 × 4.5 × 0.3), which is about 15 % of average team RPG — a
+    # modest signal that avoids over-fitting to small sample win records.
+    home_win_pct = home_stats.get("win_pct", 0.5)
+    away_win_pct = away_stats.get("win_pct", 0.5)
+    win_quality_runs = (home_win_pct - away_win_pct) * league_avg * 0.3
+    xr_home = round(max(xr_home + win_quality_runs, 0.5), 2)
+    xr_away = round(max(xr_away - win_quality_runs, 0.5), 2)
 
     # Pythagorean win expectation
     denom = xr_home ** MLB_PYTH_EXP + xr_away ** MLB_PYTH_EXP
@@ -248,8 +260,14 @@ def predict_game(home_name: str, away_name: str) -> dict:
         "live_data": live,
         "home_record": home_stats.get("summary", ""),
         "away_record": away_stats.get("summary", ""),
+        "home_win_pct": round(home_win_pct, 3),
+        "away_win_pct": round(away_win_pct, 3),
         "home_era": home_era,
         "away_era": away_era,
+        # pitcher_home/away: True when ERA data was available for that team,
+        # False otherwise. Used by score_risk_mlb to assess data quality.
+        "pitcher_home": home_era is not None,
+        "pitcher_away": away_era is not None,
         "player_props": player_props,
         "run_line": run_line,
     }

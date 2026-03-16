@@ -1388,6 +1388,43 @@ async def tabla(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # 🚀 MAIN
 # ===============================
 
+import asyncio as _asyncio
+
+
+async def _predict_one(m: dict, semaphore: "_asyncio.Semaphore") -> dict | None:
+    """
+    Run a single match prediction in a thread-pool executor with a per-match
+    timeout.  Wrapped in a semaphore to cap concurrent ESPN/API calls.
+    """
+    async with semaphore:
+        sport  = m.get("sport", "soccer").lower()
+        home   = m["home"]
+        away   = m["away"]
+        league = m.get("league", "default")
+
+        def _sync_predict():
+            if sport == "nba":
+                return _bball.predict_game(home, away)
+            if sport == "nfl":
+                return _nfl.predict_game(home, away)
+            if sport == "mlb":
+                return _baseball.predict_game(home, away)
+            return get_full_prediction(home, away, league=league, fetch_live=True)
+
+        loop = _asyncio.get_event_loop()
+        try:
+            pred = await _asyncio.wait_for(
+                loop.run_in_executor(None, _sync_predict),
+                timeout=15.0,
+            )
+            pred.setdefault("league", league)
+            return pred
+        except _asyncio.TimeoutError:
+            logger.warning("Parlay: timeout %s vs %s (%s)", home, away, sport)
+        except Exception as exc:
+            logger.warning("Parlay: skip %s vs %s (%s): %s", home, away, sport, exc)
+        return None
+
 
 async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generate parlay recommendations from today's matches (Soccer + NBA/NFL/MLB)."""
@@ -1408,29 +1445,13 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Run predictions for every match using the correct sport module ────
-    predictions = []
-    for m in matches:
-        sport = m.get("sport", "soccer").lower()
-        home, away = m["home"], m["away"]
-        try:
-            if sport == "nba":
-                pred = _bball.predict_game(home, away)
-            elif sport == "nfl":
-                pred = _nfl.predict_game(home, away)
-            elif sport == "mlb":
-                pred = _baseball.predict_game(home, away)
-            else:
-                # Soccer / football
-                pred = get_full_prediction(
-                    home, away,
-                    league=m.get("league", "default"),
-                    fetch_live=True,
-                )
-            pred.setdefault("league", m.get("league", ""))
-            predictions.append(pred)
-        except Exception as e:
-            logger.warning("Parlay: skip %s vs %s (%s): %s", home, away, sport, e)
+    # ── Run predictions concurrently with per-match 15 s timeout ─────────
+    semaphore = _asyncio.Semaphore(5)   # max 5 concurrent ESPN/API calls
+    preds = await _asyncio.gather(
+        *[_predict_one(m, semaphore) for m in matches],
+        return_exceptions=False,
+    )
+    predictions = [p for p in preds if p is not None]
 
     if not predictions:
         await update.message.reply_text(
@@ -1450,8 +1471,8 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     legs, report, _excluded = generate_parlay_legs(
         predictions,
-        min_confidence="ALTA",
-        min_prob=75.0,
+        min_confidence="MEDIA",
+        min_prob=65.0,
         cal_stats=cal_stats,
     )
 
@@ -1522,28 +1543,13 @@ async def parlay_safe_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    # ── Run predictions ───────────────────────────────────────────────────
-    predictions = []
-    for m in matches:
-        sport = m.get("sport", "soccer").lower()
-        home, away = m["home"], m["away"]
-        try:
-            if sport == "nba":
-                pred = _bball.predict_game(home, away)
-            elif sport == "nfl":
-                pred = _nfl.predict_game(home, away)
-            elif sport == "mlb":
-                pred = _baseball.predict_game(home, away)
-            else:
-                pred = get_full_prediction(
-                    home, away,
-                    league=m.get("league", "default"),
-                    fetch_live=True,
-                )
-            pred.setdefault("league", m.get("league", ""))
-            predictions.append(pred)
-        except Exception as e:
-            logger.warning("ParlayS: skip %s vs %s (%s): %s", home, away, sport, e)
+    # ── Run predictions concurrently with per-match 15 s timeout ─────────
+    semaphore = _asyncio.Semaphore(5)
+    preds = await _asyncio.gather(
+        *[_predict_one(m, semaphore) for m in matches],
+        return_exceptions=False,
+    )
+    predictions = [p for p in preds if p is not None]
 
     if not predictions:
         await update.message.reply_text(
@@ -1617,15 +1623,15 @@ async def photo_parlay_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         legs = parse_parlay_text(caption)
         if not legs:
             await update.message.reply_text(
-                "❌ No pude detectar patas de parlay en el caption\\.\n\n"
+                "❌ No pude detectar patas de parlay en el caption.\n\n"
                 + USAGE_TEXT,
-                parse_mode="MarkdownV2",
+                parse_mode="Markdown",
             )
             return
 
         analysis = analyze_parlay(legs)
         await update.message.reply_text(
-            format_parlay_analysis(analysis), parse_mode="MarkdownV2"
+            format_parlay_analysis(analysis), parse_mode="Markdown"
         )
     except Exception as exc:
         logger.exception("Error en análisis de parlay (foto)")
@@ -1649,7 +1655,7 @@ async def checkparlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         from core.parlay_analyzer import USAGE_TEXT
         await update.message.reply_text(
             "❌ Uso: `/checkparlay <patas del parlay>`\n\n" + USAGE_TEXT,
-            parse_mode="MarkdownV2",
+            parse_mode="Markdown",
         )
         return
 
@@ -1666,14 +1672,14 @@ async def checkparlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         legs = parse_parlay_text(raw_text)
         if not legs:
             await update.message.reply_text(
-                "❌ No pude parsear las patas del parlay\\.\n\n" + USAGE_TEXT,
-                parse_mode="MarkdownV2",
+                "❌ No pude parsear las patas del parlay.\n\n" + USAGE_TEXT,
+                parse_mode="Markdown",
             )
             return
 
         analysis = analyze_parlay(legs)
         await update.message.reply_text(
-            format_parlay_analysis(analysis), parse_mode="MarkdownV2"
+            format_parlay_analysis(analysis), parse_mode="Markdown"
         )
     except Exception as exc:
         logger.exception("Error en /checkparlay")
@@ -1694,16 +1700,20 @@ async def resultado_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     - ``X`` = cancelado / void
 
     If ``<id>`` is omitted the most recently generated parlay is used.
+    Also accepts external platform IDs (e.g. PlayDoIt, Caliente, Bet365).
 
     Examples
     --------
     /resultado P240315-2 WLW
-    /resultado WWL        ← uses the last parlay
+    /resultado PLAYDOIT-12345 WLW    ← external platform ID
+    /resultado BET365-ABC123 LLW     ← external platform ID
+    /resultado WWL                   ← uses the last parlay
     """
     if not context.args:
         await update.message.reply_text(
             "❌ Uso: `/resultado [<id>] <WLWWL>`\n\n"
-            "Ejemplo: `/resultado P240315-2 WLW`\n"
+            "Ejemplo interno: `/resultado P240315-2 WLW`\n"
+            "Ejemplo externo: `/resultado PLAYDOIT-12345 WLW`\n"
             "O para el último parlay: `/resultado WWL`\n\n"
             "W = Ganó · L = Perdió · X = Cancelado",
             parse_mode="Markdown",
@@ -1715,13 +1725,20 @@ async def resultado_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         get_last_parlay_id,
         get_num_legs_for_parlay,
         format_result_confirmation,
-        PARLAY_ID_RE,
+        save_external_parlay,
     )
 
     args = context.args
 
-    # Determine whether first arg is a parlay ID or result string
-    if len(args) >= 2 and PARLAY_ID_RE.match(args[0]):
+    # Determine whether the first arg is a parlay ID or a results string.
+    # Rule: if the first arg contains any character outside W/L/X it is an ID
+    # (handles both internal "P240315-2" and external "PLAYDOIT-12345").
+    _RESULT_CHARS = frozenset("WLX")
+    first_is_id = len(args) >= 2 and not all(
+        c in _RESULT_CHARS for c in args[0].upper()
+    )
+
+    if first_is_id:
         parlay_id   = args[0].upper()
         results_str = "".join(args[1:]).upper()
     else:
@@ -1764,12 +1781,22 @@ async def resultado_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     outcome = record_results(parlay_id, results_list)
 
     if not outcome["found"]:
-        await update.message.reply_text(
-            f"❌ Parlay `{parlay_id}` no encontrado.\n"
-            "Usa `/historial` para ver los IDs guardados.",
-            parse_mode="Markdown",
-        )
-        return
+        # For external platform IDs: create a lightweight placeholder and try again
+        if first_is_id:
+            try:
+                outcome = save_external_parlay(parlay_id, results_list)
+            except Exception as exc:
+                logger.warning(
+                    "resultado_command: could not save external parlay %s: %s",
+                    parlay_id, exc,
+                )
+        if not outcome["found"]:
+            await update.message.reply_text(
+                f"❌ Parlay `{parlay_id}` no encontrado.\n"
+                "Usa `/historial` para ver los IDs guardados.",
+                parse_mode="Markdown",
+            )
+            return
 
     await update.message.reply_text(
         format_result_confirmation(outcome), parse_mode="Markdown"
@@ -2838,14 +2865,41 @@ async def rl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def autoscan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /autoscan — Show the auto-scanner status and configuration.
+    /autoscan — Show the auto-scanner status and trigger an immediate scan cycle.
 
-    Displays whether ODDS_API_KEY is configured, scan interval, EV threshold,
-    remaining Odds API quota, and dedup cache size.
+    Displays configuration (ODDS_API_KEY, interval, EV threshold, quota) and
+    then runs ``scan_once()`` to fetch live bookmaker odds right now, detect
+    arbitrage / value bets / steam moves, and return any alerts directly to
+    this chat.
     """
     try:
-        from core.auto_scanner import status_summary
+        from core.auto_scanner import status_summary, scan_once
+        # 1. Show status first
         await update.message.reply_text(status_summary(), parse_mode="Markdown")
+
+        # 2. Trigger an immediate scan cycle
+        await update.message.reply_text("🔍 Ejecutando escaneo ahora…")
+        alerts = await scan_once()
+
+        if not alerts:
+            await update.message.reply_text(
+                "✅ Escaneo completado — sin alertas nuevas en este ciclo.\n"
+                "_El scanner automático enviará alertas al canal configurado "
+                "cada vez que detecte oportunidades._",
+                parse_mode="Markdown",
+            )
+        else:
+            await update.message.reply_text(
+                f"📊 *{len(alerts)} alerta(s) encontrada(s):*",
+                parse_mode="Markdown",
+            )
+            for alert in alerts:
+                try:
+                    await update.message.reply_text(
+                        alert.message, parse_mode="Markdown"
+                    )
+                except Exception:
+                    await update.message.reply_text(f"⚠️ {alert.summary}")
     except Exception as exc:
         logger.exception("Error en /autoscan")
         await update.message.reply_text(f"❌ Error: {exc}")
