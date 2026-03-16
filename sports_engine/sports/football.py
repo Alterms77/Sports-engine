@@ -476,6 +476,54 @@ def predict_match(
             "tilt_home": 50.0, "tilt_away": 50.0,
         }
 
+    # ── Shot metrics (§1-§5 of the shot analytics spec) ──
+    _shot_context: dict = {}
+    try:
+        from core.shot_metrics import build_shot_context_from_xg
+
+        # Try to enrich with API-Football season shot averages when key is set
+        _home_form_shots: dict = {}
+        _away_form_shots: dict = {}
+        try:
+            from api.api_football import get_team_season_shot_stats
+            from datetime import datetime
+            _season = datetime.now().year
+            # League IDs in config; fall back gracefully when team not found
+            from core.config import LEAGUE_IDS
+            _league_id = LEAGUE_IDS.get(league, 0)
+            if _league_id:
+                from api.espn_api import find_team_id as _find_id
+                _hid = _find_id("soccer", home_resolved)
+                _aid = _find_id("soccer", away_resolved)
+                if _hid:
+                    _home_form_shots = get_team_season_shot_stats(
+                        int(_hid), _league_id, _season
+                    ) or {}
+                if _aid:
+                    _away_form_shots = get_team_season_shot_stats(
+                        int(_aid), _league_id, _season
+                    ) or {}
+        except Exception:
+            pass  # API Football not configured — use xG derivation only
+
+        _shot_context = build_shot_context_from_xg(
+            xg_home, xg_away,
+            final_probs,
+            home_name=home_resolved,
+            away_name=away_resolved,
+            home_form_shots=_home_form_shots or None,
+            away_form_shots=_away_form_shots or None,
+        )
+
+        # Apply shot-based probability adjustments to final_probs
+        _adj = _shot_context.get("adjusted_probs", {})
+        if _adj.get("shot_adjustment_applied"):
+            for _k in ("home_win", "draw", "away_win", "over_1_5", "over_2_5", "over_3_5"):
+                if _k in _adj:
+                    final_probs[_k] = _adj[_k]
+    except Exception:
+        _shot_context = {}
+
     # ── Sharp game detection ──
     try:
         from core.elo import get_team_elo
@@ -540,6 +588,8 @@ def predict_match(
         "tilt_away": advanced["tilt_away"],
         "home_elo": home_elo,
         "away_elo": away_elo,
+        # ── Shot metrics (§1-§5) ──
+        "shot_metrics": _shot_context,
     }
 
     # ── Advanced predictions (DNB, Double Chance, AH, HT/FT, team totals) ──

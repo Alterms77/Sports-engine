@@ -299,6 +299,61 @@ def format_prediction(pred: dict) -> str:
         "",
     ]
 
+    # ── Shot metrics block (§6 of the shot analytics spec) ──
+    _shot_ctx = pred.get("shot_metrics", {})
+    if _shot_ctx:
+        _sh = _shot_ctx.get("home", {})
+        _sa = _shot_ctx.get("away", {})
+        _proj = _shot_ctx.get("projection", {})
+
+        _sh_tot  = _sh.get("total_shots",     0.0)
+        _sa_tot  = _sa.get("total_shots",     0.0)
+        _sh_sot  = _sh.get("shots_on_target", 0.0)
+        _sa_sot  = _sa.get("shots_on_target", 0.0)
+        _sh_acc  = _sh.get("shot_accuracy",   0.0)
+        _sa_acc  = _sa.get("shot_accuracy",   0.0)
+        _sh_dom  = _sh.get("shot_dominance",  0.5)
+        _sa_dom  = _sa.get("shot_dominance",  0.5)
+        _h_proj  = _proj.get("home_projected", 0.0)
+        _a_proj  = _proj.get("away_projected", 0.0)
+
+        lines += [
+            "👁 *TIROS*",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"  Tiros Totales   {home1}: `{_sh_tot:.1f}` ─── `{_sa_tot:.1f}` :{away1}",
+            f"  Tiros a Puerta  {home1}: `{_sh_sot:.1f}` ─── `{_sa_sot:.1f}` :{away1}",
+            f"  Precisión       {home1}: `{_sh_acc*100:.0f}%` ─── `{_sa_acc*100:.0f}%` :{away1}",
+            f"  Dominio Tiros   {home1}: `{_sh_dom*100:.0f}%`  /  {away1}: `{_sa_dom*100:.0f}%`",
+        ]
+
+        if _h_proj > 0 or _a_proj > 0:
+            lines.append(
+                f"  Proyección      {home1}: `{_h_proj:.1f}` ─── `{_a_proj:.1f}` :{away1}"
+            )
+
+        # Shot quality / threat rate (only when meaningful)
+        _sh_qual = _sh.get("shot_quality", 0.0)
+        _sa_qual = _sa.get("shot_quality", 0.0)
+        if _sh_qual > 0 or _sa_qual > 0:
+            lines.append(
+                f"  Cal. Disparo    {home1}: `{_sh_qual:.3f}` ─── `{_sa_qual:.3f}` :{away1}"
+            )
+
+        # Adjustment reasons (inform the user when shots changed probs)
+        _adj_reasons = (_shot_ctx.get("adjusted_probs") or {}).get("shot_adjustment_reasons", [])
+        if _adj_reasons:
+            lines.append(f"  ⚡ Ajuste: `{', '.join(_adj_reasons)}`")
+
+        lines.append("")
+
+        # Shot-based auto-picks (§7 value detection)
+        _shot_picks = _shot_ctx.get("shot_picks", [])
+        if _shot_picks:
+            lines += ["🎯 *PICKS POR TIROS*", "━━━━━━━━━━━━━━━━━━━━"]
+            for _sp in _shot_picks[:4]:   # cap at 4 to avoid clutter
+                lines.append(f"  ✅ {_sp['pick']}  _{_sp['reason']}_")
+            lines.append("")
+
     # ── Probabilities with visual bars ──
     hw = pred.get("home_win", 0)
     dr = pred.get("draw", 0)

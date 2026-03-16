@@ -549,6 +549,66 @@ def get_nfl_team_stats(team_name: str) -> dict:
 
 
 # ════════════════════════════════════════════════════════════════════════════════
+# Soccer — shot statistics
+# ════════════════════════════════════════════════════════════════════════════════
+
+def get_soccer_team_shot_stats(team_name: str, competition_id: str = "") -> dict:
+    """
+    Return season shot-volume statistics for a soccer team via Sportradar.
+
+    Keys returned (when data is available):
+        avg_shots               float  — total shots per game (season avg)
+        avg_shots_on_target     float  — SoT per game
+        avg_shots_allowed       float  — total shots conceded per game
+        avg_shots_on_target_allowed float
+
+    Returns ``{}`` on any failure (plan restriction, network error, missing data).
+
+    Note: Sportradar soccer statistics depth depends on the API subscription
+    level.  Trial plans may return only basic statistics.
+    """
+    if not is_available():
+        return {}
+    try:
+        # Sportradar soccer competitor statistics endpoint
+        # The competition_id can be the SR tournament URN, e.g. "sr:competition:17"
+        # for Premier League.  When absent we try the global summary endpoint.
+        norm_name = _normalize(team_name)
+        comp_path = f"competitions/{competition_id}/seasons" if competition_id else ""
+        # Look for competitor season statistics
+        if not competition_id:
+            return {}   # Cannot look up season stats without a competition context
+        url = _soccer_url(f"{comp_path}/competitors/{norm_name}/statistics")
+        data = _fetch(url, ttl=_TTL_SEASON)
+        if not data:
+            return {}
+
+        stats = data.get("statistics", {})
+        shots = stats.get("shots", {})
+        if not shots:
+            return {}
+
+        gp = int(data.get("games_played", 0) or 0)
+        if gp <= 0:
+            return {}
+
+        avg_shots         = round(float(shots.get("total",     0) or 0) / gp, 1)
+        avg_sot           = round(float(shots.get("on_target", 0) or 0) / gp, 1)
+        avg_allowed       = round(float(shots.get("total_against",     0) or 0) / gp, 1)
+        avg_sot_allowed   = round(float(shots.get("on_target_against", 0) or 0) / gp, 1)
+
+        return {
+            "avg_shots":                   avg_shots,
+            "avg_shots_on_target":         avg_sot,
+            "avg_shots_allowed":           avg_allowed,
+            "avg_shots_on_target_allowed": avg_sot_allowed,
+        }
+    except Exception as exc:
+        logger.debug("Sportradar soccer shot stats for '%s': %s", team_name, exc)
+        return {}
+
+
+# ════════════════════════════════════════════════════════════════════════════════
 # Utility
 # ════════════════════════════════════════════════════════════════════════════════
 
