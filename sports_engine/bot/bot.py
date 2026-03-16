@@ -6,7 +6,7 @@ import asyncio as _asyncio
 import logging
 import threading
 import time as _time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 # Allow importing from sports_engine/ regardless of working directory
@@ -514,6 +514,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎾 Tenis: `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
         "🎰 Parlays: `/parlay` — parlays confiables del día\n"
         "🎯 Parlay Safe: `/parlay_safe` — máximo hit rate (2-3 patas, moneyline)\n"
+        "🌙 Parlay Soñador: `/parlay_sonador` — todos los deportes y mercados\n"
         "📸 Analizar tu parlay: `/checkparlay` o envía una *foto* con caption\n"
         "📋 Reportar resultado: `/resultado <id> WLW`\n"
         "📊 Historial & calibración: `/historial`\n"
@@ -575,6 +576,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  _Ej:_ `/markets Liverpool vs Arsenal`\n\n"
         "🎰 `/parlay` — parlays confiables del día\n"
         "🎯 `/parlay_safe` — parlay de máximo hit rate (2-3 patas, moneyline, filtros estrictos)\n"
+        "🌙 `/parlay_sonador` — Parlay Soñador: todos los deportes y mercados disponibles\n"
         "📸 `/checkparlay <patas>` — analiza tu parlay propio\n"
         "  _Envía también una foto con el caption de las patas_\n"
         "  _Ej:_ `/checkparlay Burnley vs Bournemouth Over 2.5 @1.75; Lakers vs Warriors @2.10`\n"
@@ -1727,7 +1729,19 @@ async def parlay_dream_command(update: Update, context: ContextTypes.DEFAULT_TYP
     from core.parlay import generate_dream_parlay, format_parlay_dream
     from core.parlay_history import save_parlay as _save_parlay
 
-    bundles = generate_dream_parlay(predictions, max_bundles=4)
+    bundles = generate_dream_parlay(predictions)
+
+    # ── Validate minimum 3 total picks ────────────────────────────────────────
+    total_picks = sum(len(b["legs"]) for b in bundles)
+    if total_picks < 3:
+        await update.message.reply_text(
+            "⚠️ No hay suficientes mercados disponibles para armar un Parlay Soñador "
+            "con mínimo 3 picks hoy.\n"
+            "Intenta más tarde cuando haya más partidos disponibles, "
+            "o usa `/parlay` para opciones estándar.",
+            parse_mode="Markdown",
+        )
+        return
 
     # ── Save to history ────────────────────────────────────────────────────
     parlay_id = ""

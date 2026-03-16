@@ -84,10 +84,13 @@ def _fetch(url: str, params: dict = None, timeout: int = 8) -> Optional[dict]:
 
 # ── Scoreboard ─────────────────────────────────────────────────────────────────
 
-def get_scoreboard(sport: str) -> list:
+def get_scoreboard(sport: str, date: str = None) -> list:
     """
-    Return today's games for a sport as a list of dicts:
+    Return games for a sport as a list of dicts:
       {"sport", "home", "away", "home_score", "away_score", "status"}
+
+    ``date`` can be an ``"YYYYMMDD"`` string to fetch a specific day
+    (e.g. tomorrow).  When omitted, ESPN returns today's schedule.
 
     Returns [] when ESPN is unreachable or sport key is unknown.
     """
@@ -96,7 +99,8 @@ def get_scoreboard(sport: str) -> list:
         logger.warning("Unknown sport key for ESPN: %s", sport)
         return []
 
-    data = _fetch(f"{_BASE}/{path}/scoreboard")
+    params = {"dates": date} if date else None
+    data = _fetch(f"{_BASE}/{path}/scoreboard", params=params)
     if not data:
         return []
 
