@@ -718,15 +718,21 @@ def _build_candidates(pred: dict) -> list:
     # ── NBA game totals ──────────────────────────────────────────────────
     if "nba" in sport_raw:
         game_totals = pred.get("game_totals", {})
-        projected   = float(pred.get("over_under") or 0.0)
+        # Use the raw game_total (1 decimal) as the projection and the
+        # rounded over_under_line as the betting line so there is a real
+        # probability edge (instead of always landing at 50 %).
+        raw_proj = float(
+            (game_totals.get("game_total") if game_totals else None)
+            or pred.get("over_under") or 0.0
+        )
         if game_totals and isinstance(game_totals, dict):
             line = float(game_totals.get("over_under_line") or
-                         game_totals.get("line") or projected or 220.0)
+                         game_totals.get("line") or raw_proj or 220.0)
             # Use over_prob/under_prob directly when provided (legacy format)
             over_p  = float(game_totals.get("over_prob")  or 0.0)
             under_p = float(game_totals.get("under_prob") or 0.0)
-            if not over_p and projected > 0:
-                over_p  = _ou_prob(projected, line)
+            if not over_p and raw_proj > 0:
+                over_p  = _ou_prob(raw_proj, line)
                 under_p = round(100.0 - over_p, 1)
             if over_p > 0:
                 candidates.append({
@@ -740,9 +746,9 @@ def _build_candidates(pred: dict) -> list:
                     "prob": under_p,
                     "market_type": "totals", "p_second": 0.0,
                 })
-        elif projected > 0:
-            line    = float(round(projected))
-            over_p  = _ou_prob(projected, line)
+        elif raw_proj > 0:
+            line    = float(round(raw_proj))
+            over_p  = _ou_prob(raw_proj, line)
             under_p = round(100.0 - over_p, 1)
             if over_p > 0:
                 candidates.append({
@@ -761,7 +767,9 @@ def _build_candidates(pred: dict) -> list:
     if "nfl" in sport_raw:
         projected = float(pred.get("over_under") or 0.0)
         if projected > 0:
-            line    = float(round(projected * 2) / 2)   # nearest 0.5
+            # Use floor-to-nearest-0.5 so the projection sits above the line,
+            # giving Over a natural edge (e.g., projected=47.3 → line=47.0 → Over ≈ 55%)
+            line    = math.floor(projected * 2) / 2.0
             over_p  = _ou_prob(projected, line, sigma_frac=0.10)
             under_p = round(100.0 - over_p, 1)
             if over_p > 0:
@@ -1324,75 +1332,55 @@ def _build_dream_bundle(pred: dict) -> dict | None:
         o35  = float(pred.get("over_3_5") or 0.0)
         btts = float(pred.get("btts")     or 0.0)
 
+        # ── Pick 2: best goals market ─────────────────────────────────────
+        # Prefer the highest Over line that clears 50 %; fall back to BTTS.
+        goals_pick: dict | None = None
         if winner_direction in ("home", "away"):
-            # Active game expected — prefer the highest Over line with ≥ 50 %
             if o35 >= 50.0:
-                cand = next((c for c in candidates if c["pick"] == "Over 3.5"), None)
-                if cand:
-                    selected.append(cand)
-            elif o25 >= 50.0:
-                cand = next((c for c in candidates if c["pick"] == "Over 2.5"), None)
-                if cand:
-                    selected.append(cand)
-            elif o15 >= 55.0:
-                cand = next((c for c in candidates if c["pick"] == "Over 1.5"), None)
-                if cand:
-                    selected.append(cand)
-
-            # BTTS coherent only when it's not a likely blowout (< 75 % win prob)
-            win_prob = max(hw, aw)
-            if btts >= 50.0 and win_prob < 75.0:
-                cand = next((c for c in candidates if "BTTS" in c["pick"]), None)
-                if cand and not any("BTTS" in s["pick"] for s in selected):
-                    selected.append(cand)
-
+                goals_pick = next((c for c in candidates if c["pick"] == "Over 3.5"), None)
+            if not goals_pick and o25 >= 50.0:
+                goals_pick = next((c for c in candidates if c["pick"] == "Over 2.5"), None)
+            if not goals_pick and o15 >= 55.0:
+                goals_pick = next((c for c in candidates if c["pick"] == "Over 1.5"), None)
         elif winner_direction == "draw":
-            # Draw story: moderate scoring expected — Over 1.5/2.5 OK, Over 3.5 NOT
+            # Draw narrative: Over 1.5/2.5 OK, Over 3.5 inconsistent with draw
             if o25 >= 50.0:
-                cand = next((c for c in candidates if c["pick"] == "Over 2.5"), None)
-                if cand:
-                    selected.append(cand)
-            elif o15 >= 55.0:
-                cand = next((c for c in candidates if c["pick"] == "Over 1.5"), None)
-                if cand:
-                    selected.append(cand)
-            # BTTS coherent with draws (both teams usually score)
-            if btts >= 50.0:
-                cand = next((c for c in candidates if "BTTS" in c["pick"]), None)
-                if cand and not any("BTTS" in s["pick"] for s in selected):
-                    selected.append(cand)
-
+                goals_pick = next((c for c in candidates if c["pick"] == "Over 2.5"), None)
+            if not goals_pick and o15 >= 55.0:
+                goals_pick = next((c for c in candidates if c["pick"] == "Over 1.5"), None)
         else:
-            # No clear direction — use the best available totals line
+            # No clear direction — pick best totals line ≥ 55 %
             for line_name, line_prob in [
-                ("Over 1.5", o15), ("Over 2.5", o25), ("Over 3.5", o35)
+                ("Over 2.5", o25), ("Over 1.5", o15), ("Over 3.5", o35)
             ]:
                 if line_prob >= 55.0:
-                    cand = next((c for c in candidates if c["pick"] == line_name), None)
-                    if cand:
-                        selected.append(cand)
+                    goals_pick = next((c for c in candidates if c["pick"] == line_name), None)
+                    if goals_pick:
                         break
 
-        # ── Corners: best side (Over/Under) if prob ≥ 55 % ────────────────
-        corners_cands = [c for c in candidates
-                         if c["market_type"] == "corners" and c["prob"] >= 55.0]
-        if corners_cands:
-            selected.append(max(corners_cands, key=lambda c: c["prob"]))
+        # If no goals line qualifies, try BTTS as the secondary pick
+        if not goals_pick and btts >= 50.0:
+            goals_pick = next((c for c in candidates if "BTTS" in c["pick"]), None)
+        if goals_pick:
+            selected.append(goals_pick)
 
-        # ── Shots on target: best side if prob ≥ 55 % ────────────────────
-        shots_cands = [c for c in candidates
-                       if c["market_type"] == "shots" and c["prob"] >= 55.0]
-        if shots_cands:
-            selected.append(max(shots_cands, key=lambda c: c["prob"]))
+        # BTTS as an additional pick when coherent (not blowout, not already added)
+        win_prob = max(hw, aw)
+        if (btts >= 50.0 and win_prob < 75.0 and winner_direction != "draw"
+                and not any("BTTS" in s["pick"] for s in selected)):
+            cand = next((c for c in candidates if "BTTS" in c["pick"]), None)
+            if cand:
+                selected.append(cand)
 
-        # ── Cards: Over 3.5 or Over 4.5 if prob ≥ 55 % ───────────────────
-        cards_cands = sorted(
-            [c for c in candidates
-             if c["market_type"] == "cards" and c["prob"] >= 55.0],
-            key=lambda c: c["prob"], reverse=True,
-        )
-        if cards_cands:
-            selected.append(cards_cands[0])
+        # ── Pick 3 (specialty): best of corners / shots / cards ───────────
+        # Choose the single specialty market candidate with the highest prob.
+        specialty_types = ("corners", "shots", "cards")
+        specialty_cands = [
+            c for c in candidates
+            if c["market_type"] in specialty_types and c["prob"] >= 55.0
+        ]
+        if specialty_cands:
+            selected.append(max(specialty_cands, key=lambda c: c["prob"]))
 
         high_scoring = o25 >= 50.0
         btts_story   = btts >= 50.0 and winner_direction != "draw"
@@ -1400,9 +1388,10 @@ def _build_dream_bundle(pred: dict) -> dict | None:
 
     elif "nba" in sport:
         total_pts = float(pred.get("over_under") or 0.0)
-        # Use totals candidates generated by _build_candidates (Over/Under pts)
+        # Include game total when there is ANY real probability edge above 50 %
+        # (the raw game_total vs the rounded line provides a natural 0–2 % edge)
         totals_cands = [c for c in candidates
-                        if c["market_type"] == "totals" and c["prob"] >= 50.0]
+                        if c["market_type"] == "totals" and c["prob"] > 50.0]
         if totals_cands:
             selected.append(max(totals_cands, key=lambda c: c["prob"]))
         narrative = _nba_narrative(home, away, winner_name, total_pts)
@@ -1421,18 +1410,18 @@ def _build_dream_bundle(pred: dict) -> dict | None:
                 rl_label = f"{home} -1.5" if fav == "home" else f"{away} -1.5"
                 selected.append({"pick": rl_label, "prob": round(cov, 1),
                                   "market_type": "spread"})
-        # Add runs O/U from candidates (e.g., Over 9.0 Carreras)
+        # Runs O/U from candidates — only when there is a real edge (≥ 52 %)
         totals_cands = [c for c in candidates
-                        if c["market_type"] == "totals" and c["prob"] >= 50.0]
+                        if c["market_type"] == "totals" and c["prob"] >= 52.0]
         if totals_cands:
             selected.append(max(totals_cands, key=lambda c: c["prob"]))
         narrative = _generic_narrative(home, away, winner_name)
 
     elif "nfl" in sport:
         total_pts = float(pred.get("over_under") or 0.0)
-        # Use totals candidates generated by _build_candidates (Over/Under pts)
+        # Include game total when there is ANY real probability edge above 50 %
         totals_cands = [c for c in candidates
-                        if c["market_type"] == "totals" and c["prob"] >= 50.0]
+                        if c["market_type"] == "totals" and c["prob"] > 50.0]
         if totals_cands:
             selected.append(max(totals_cands, key=lambda c: c["prob"]))
         narrative = _generic_narrative(home, away, winner_name)
@@ -1440,7 +1429,7 @@ def _build_dream_bundle(pred: dict) -> dict | None:
     else:
         # Other sports: add the best non-moneyline pick available
         non_ml = [c for c in candidates
-                  if c["market_type"] != "moneyline" and c["prob"] >= 50.0]
+                  if c["market_type"] != "moneyline" and c["prob"] >= 52.0]
         if non_ml:
             selected.append(max(non_ml, key=lambda c: c["prob"]))
         narrative = _generic_narrative(home, away, winner_name)
@@ -1546,25 +1535,38 @@ def generate_dream_parlay(predictions: list, max_bundles: int = 9999) -> list:
     return bundles
 
 
-def format_parlay_dream(bundles: list, parlay_id: str = "") -> str:
+def format_parlay_dream(bundles: list, parlay_id: str = "",
+                        includes_tomorrow: bool = False) -> str:
     """
     Format the /parlay_dream output for Telegram.
 
     Covers ALL available sports and markets.  Each bundle shows the coherent
-    picks for one match.  A sport-breakdown summary is appended at the end.
+    picks for one match (moneyline + best goals market + best specialty for
+    soccer; moneyline + game totals for NBA/NFL; moneyline + run line + runs
+    for MLB).  A sport-breakdown summary is appended at the end.
+
+    ``includes_tomorrow`` adds a note when next-day games were used to reach
+    the minimum 3-pick threshold.
 
     All user-supplied text (team names) is escaped so Telegram Markdown never
     trips on underscores or other special characters.
     """
+    tomorrow_note = (
+        "_📅 Incluye partidos de mañana — mercado de hoy insuficiente._\n"
+        if includes_tomorrow else ""
+    )
     lines = [
         "╔══════════════════════════════════╗",
         "  🌙 PARLAY SOÑADOR — Sports Engine",
         "╚══════════════════════════════════╝",
         "",
-        "💭 _Todos los mercados disponibles — coherencia máxima._",
-        "_Cada partido, una historia. ¿Cuántas se harán realidad?_",
-        "",
+        "💭 _Todos los deportes · todos los mercados · coherencia máxima._",
+        "_Cada partido cuenta una historia — ¿cuántas se harán realidad?_",
     ]
+    if tomorrow_note:
+        lines.append("")
+        lines.append(tomorrow_note.rstrip())
+    lines.append("")
 
     _numbers = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"]
 
@@ -1589,7 +1591,15 @@ def format_parlay_dream(bundles: list, parlay_id: str = "") -> str:
             for j, leg in enumerate(bundle["legs"]):
                 num    = _numbers[j] if j < len(_numbers) else f"{j+1}."
                 pick_s = _md_escape(leg["pick"])
-                lines.append(f"  {num} {pick_s} ({leg['prob']}%)")
+                mtype  = leg.get("market_type", "")
+                # Append a compact market-type label so the user knows what each pick is
+                _mtype_label = {
+                    "moneyline": "🏆", "totals": "📈", "btts": "⚽",
+                    "spread": "📐", "corners": "🔄", "cards": "🟨",
+                    "shots": "🎯",
+                }
+                mlabel = _mtype_label.get(mtype, "")
+                lines.append(f"  {num} {mlabel} {pick_s} ({leg['prob']}%)")
             lines.append(f"  📊 Bundle: *{bundle['bundle_prob']}%*")
             lines.append("")
             total_legs    += len(bundle["legs"])
@@ -1599,9 +1609,12 @@ def format_parlay_dream(bundles: list, parlay_id: str = "") -> str:
             s_emoji = bundle.get("sport_emoji", "🎯")
             sport_counts[s_emoji] = sport_counts.get(s_emoji, 0) + 1
 
-        combined_pct = round(combined_prob * 100, 1)
+        combined_pct = round(combined_prob * 100, 2)
+        combined_str = (
+            f"{combined_pct:.2f}%" if combined_pct < 1.0 else f"{combined_pct:.1f}%"
+        )
         lines.append("━━━━━━━━━━━━━━━━━━━━")
-        lines.append(f"📊 *Prob. combinada total: {combined_pct}%*")
+        lines.append(f"📊 *Prob. combinada total: {combined_str}*")
         lines.append(f"🎰 *Patas totales: {total_legs}*")
         lines.append(f"🗂 *Partidos: {len(bundles)}*")
         lines.append("🌙 *Riesgo: SOÑADOR*")

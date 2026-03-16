@@ -217,6 +217,67 @@ def load_today_matches_multisport() -> list:
     return matches
 
 
+def load_tomorrow_matches_multisport() -> list:
+    """Return upcoming matches for tomorrow across Soccer, NBA, NFL, and MLB.
+
+    Used as a fallback by ``/parlay_dream`` when today's schedule has too few
+    games to reach the minimum 3-pick threshold.
+
+    Sources
+    -------
+    - Soccer : local ``today_matches.csv`` filtered to tomorrow's date
+    - NBA / NFL / MLB : ESPN scoreboard with ``dates=YYYYMMDD`` for tomorrow
+    """
+    tomorrow_dt  = datetime.now(timezone.utc) + timedelta(days=1)
+    tomorrow_str = tomorrow_dt.strftime("%Y-%m-%d")      # for CSV filter
+    espn_date    = tomorrow_dt.strftime("%Y%m%d")        # for ESPN API
+
+    matches: list = []
+
+    # ── Soccer from local CSV filtered to tomorrow ─────────────────────────
+    now_utc  = datetime.now(timezone.utc).replace(tzinfo=None)
+    _pending = {"NS", "TBD", "PST", "SUSP", "INT"}
+    try:
+        with open(DATA_PATH, newline="", encoding="utf-8") as csvfile:
+            for row in csv.DictReader(csvfile):
+                if row.get("date", "").strip() != tomorrow_str:
+                    continue
+                status = row.get("status", "NS").strip()
+                if status and status not in _pending:
+                    continue
+                matches.append({
+                    "home":   row["home"].strip(),
+                    "away":   row["away"].strip(),
+                    "league": row.get("league", "").strip(),
+                    "sport":  "soccer",
+                })
+    except Exception as exc:
+        logger.debug("load_tomorrow_matches_multisport: soccer CSV error: %s", exc)
+
+    # ── NBA / NFL / MLB from ESPN (tomorrow's date) ────────────────────────
+    _espn_scheduled = {"Scheduled", "Pregame", "Pre-Game"}
+    try:
+        from api.espn_api import get_scoreboard
+        for sport in ("nba", "nfl", "mlb"):
+            try:
+                games = get_scoreboard(sport, date=espn_date)
+                for g in games:
+                    if g.get("status", "Scheduled") not in _espn_scheduled:
+                        continue
+                    matches.append({
+                        "home":   g["home"],
+                        "away":   g["away"],
+                        "league": sport.upper(),
+                        "sport":  sport,
+                    })
+            except Exception as exc:
+                logger.debug("ESPN tomorrow scoreboard %s: %s", sport, exc)
+    except Exception as exc:
+        logger.debug("ESPN API import failed (tomorrow): %s", exc)
+
+    return matches
+
+
 def _confidence_emoji(confidence: str) -> str:
     return {"ALTA": "🟢", "MEDIA": "🟡", "BAJA": "🔴"}.get(confidence, "⚪")
 
@@ -1692,8 +1753,13 @@ async def parlay_dream_command(update: Update, context: ContextTypes.DEFAULT_TYP
     /parlay_dream  (alias: /parlay_sonador)
 
     Generate a high-risk, high-reward "dream parlay" that covers multiple
-    correlated picks per match across all available sports.  Each bundle tells
-    a coherent story — lower probability but more exciting.
+    correlated picks per match across ALL available sports and markets.
+    Each bundle tells a coherent story using the specific markets of each
+    sport (goals, BTTS, corners, cards, shots for soccer; game totals for
+    NBA/NFL; run line + runs for MLB).
+
+    If today's schedule is too thin (< 3 total picks), tomorrow's games are
+    automatically included so there is always a full parlay.
     """
     await update.message.reply_text(
         "🌙 Generando Parlay Soñador…",
@@ -1703,43 +1769,57 @@ async def parlay_dream_command(update: Update, context: ContextTypes.DEFAULT_TYP
     # ── Refresh soccer CSV if stale ────────────────────────────────────────
     _refresh_matches_if_stale()
 
-    # ── Load today's matches; ESPN may already include tomorrow's games ──────
+    # ── Load today's matches ───────────────────────────────────────────────
     matches = load_today_matches_multisport()
-    if not matches:
-        await update.message.reply_text(
-            "❌ No hay partidos disponibles para hoy.\nUsa `/today` para verificar o intenta más tarde.",
-            parse_mode="Markdown",
-        )
-        return
+    using_tomorrow = False
 
-    # ── Run predictions concurrently with per-match 15 s timeout ─────────
+    # ── Quick prediction run to test if today is enough ───────────────────
     semaphore = _asyncio.Semaphore(5)
-    preds = await _asyncio.gather(
-        *[_predict_one(m, semaphore) for m in matches],
-        return_exceptions=False,
-    )
-    predictions = [p for p in preds if p is not None]
 
-    if not predictions:
-        await update.message.reply_text(
-            "❌ No se pudieron generar predicciones para los partidos de hoy."
+    async def _get_predictions(match_list: list) -> list:
+        preds = await _asyncio.gather(
+            *[_predict_one(m, semaphore) for m in match_list],
+            return_exceptions=False,
         )
-        return
+        return [p for p in preds if p is not None]
+
+    if not matches:
+        predictions = []
+    else:
+        predictions = await _get_predictions(matches)
 
     from core.parlay import generate_dream_parlay, format_parlay_dream
     from core.parlay_history import save_parlay as _save_parlay
 
     bundles = generate_dream_parlay(predictions)
-
-    # ── Validate minimum 3 total picks ────────────────────────────────────────
     total_picks = sum(len(b["legs"]) for b in bundles)
+
+    # ── Fallback to tomorrow when today has fewer than 3 picks ────────────
+    if total_picks < 3:
+        tomorrow_matches = load_tomorrow_matches_multisport()
+        if tomorrow_matches:
+            tomorrow_preds = await _get_predictions(tomorrow_matches)
+            if tomorrow_preds:
+                # Combine today's + tomorrow's predictions for a richer parlay
+                all_preds  = predictions + tomorrow_preds
+                bundles    = generate_dream_parlay(all_preds)
+                total_picks = sum(len(b["legs"]) for b in bundles)
+                if total_picks >= 3:
+                    using_tomorrow = True
+
     if total_picks < 3:
         await update.message.reply_text(
             "⚠️ No hay suficientes mercados disponibles para armar un Parlay Soñador "
-            "con mínimo 3 picks hoy.\n"
+            "con mínimo 3 picks.\n"
             "Intenta más tarde cuando haya más partidos disponibles, "
             "o usa `/parlay` para opciones estándar.",
             parse_mode="Markdown",
+        )
+        return
+
+    if not predictions and not using_tomorrow:
+        await update.message.reply_text(
+            "❌ No se pudieron generar predicciones para los partidos de hoy."
         )
         return
 
@@ -1761,7 +1841,8 @@ async def parlay_dream_command(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception as exc:
             logger.warning("parlay_dream_command: could not save to history: %s", exc)
 
-    text = format_parlay_dream(bundles, parlay_id=parlay_id)
+    text = format_parlay_dream(bundles, parlay_id=parlay_id,
+                               includes_tomorrow=using_tomorrow)
     try:
         await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as exc:
