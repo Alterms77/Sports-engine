@@ -49,6 +49,12 @@ RISK_THRESHOLD_SAFE    = 0.25   # /parlay_safe (more conservative)
 # Keep legacy name for test compatibility
 _HIGH_RISK_SCORE = RISK_THRESHOLD_DEFAULT
 
+# ── Calibration floor ─────────────────────────────────────────────────────────
+# Maximum downward adjustment allowed per calibration step (percentage points).
+# Prevents a "death spiral" where bad results push calibration so far down that
+# even good picks fall below min_prob.  See ``calibrate_prob_gated`` for usage.
+_CAL_FLOOR_MAX_REDUCTION = 15.0
+
 # ── Safe-mode clarity thresholds ─────────────────────────────────────────────
 # Minimum absolute probability of the best outcome (safe mode)
 MIN_PROB_SAFE_ABS = 58.0   # lowered from 62.0
@@ -420,7 +426,7 @@ def calibrate_prob_gated(
         adjusted = prob * factor
 
     # Calibration floor: prevent a downward-calibration "death spiral".
-    # If calibration would reduce the probability by more than 15 pp,
+    # If calibration would reduce the probability by more than _CAL_FLOOR_MAX_REDUCTION pp,
     # cap the reduction so picks still get a fair chance at the filter.
     # 15 pp was chosen to:
     #   (a) preserve the meaningful difference between conservative (half-
@@ -429,8 +435,8 @@ def calibrate_prob_gated(
     #       conservative blends to 0.85, giving 68 % which is above the floor),
     #   (b) still prevent extreme overconfident factors from pushing good picks
     #       all the way below min_prob in a single bad stretch of results.
-    if adjusted < prob - 15.0:
-        adjusted = prob - 15.0
+    if adjusted < prob - _CAL_FLOOR_MAX_REDUCTION:
+        adjusted = prob - _CAL_FLOOR_MAX_REDUCTION
 
     adjusted = round(adjusted, 1)
     if safe_mode:

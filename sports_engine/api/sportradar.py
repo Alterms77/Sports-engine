@@ -74,7 +74,10 @@ def is_available() -> bool:
 # ── Rate limiter (trial: 1 req/s) ─────────────────────────────────────────────
 
 _LAST_REQ_TIME: float = 0.0
-_MIN_INTERVAL = 1.1   # slightly above 1 s to stay safely under the limit
+# 1.1 s gap between requests gives a 100 ms safety margin over Sportradar's
+# trial limit of 1 req/s.  Production plans with higher limits can set
+# SPORTRADAR_ACCESS="" and the gap still protects against accidental bursts.
+_MIN_INTERVAL = 1.1
 
 
 def _rate_limit() -> None:
