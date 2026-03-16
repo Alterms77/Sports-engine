@@ -800,3 +800,255 @@ class TestFormatParlayReport:
         parlays = build_parlays(_make_legs([85.0, 82.0]))
         text = format_parlay(parlays, filtered_count=5, report=None)
         assert "excluido" in text.lower()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Dream Parlay (_build_dream_bundle, generate_dream_parlay, format_parlay_dream)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from core.parlay import (
+    _build_dream_bundle,
+    generate_dream_parlay,
+    format_parlay_dream,
+)
+
+
+def _dream_soccer_pred(home_win=72.0, away_win=15.0, draw=13.0,
+                        over_1_5=80.0, over_2_5=55.0, over_3_5=30.0, btts=52.0):
+    return {
+        "sport": "⚽ Soccer",
+        "home": "Liverpool",
+        "away": "Arsenal",
+        "home_win": home_win,
+        "away_win": away_win,
+        "draw": draw,
+        "over_1_5": over_1_5,
+        "over_2_5": over_2_5,
+        "over_3_5": over_3_5,
+        "btts": btts,
+        "confidence": "ALTA",
+        "league": "Premier League",
+    }
+
+
+def _dream_nba_pred(home_win=65.0, away_win=35.0):
+    return {
+        "sport": "NBA 🏀",
+        "home": "Lakers",
+        "away": "Celtics",
+        "home_win": home_win,
+        "away_win": away_win,
+        "confidence": "ALTA",
+        "league": "NBA",
+        "game_totals": {"over_prob": 58.0, "under_prob": 42.0, "line": 224.5},
+    }
+
+
+def _dream_mlb_pred(home_win=63.0, away_win=37.0):
+    return {
+        "sport": "MLB ⚾",
+        "home": "Yankees",
+        "away": "Red Sox",
+        "home_win": home_win,
+        "away_win": away_win,
+        "confidence": "ALTA",
+        "league": "MLB",
+        "run_line": {"fav_side": "home", "cover_prob": 57.0},
+    }
+
+
+class TestBuildDreamBundle:
+    def test_soccer_returns_bundle(self):
+        bundle = _build_dream_bundle(_dream_soccer_pred())
+        assert bundle is not None
+        assert bundle["match"] == "Liverpool vs Arsenal"
+        assert bundle["sport_emoji"] == "⚽"
+        assert len(bundle["legs"]) >= 1
+
+    def test_soccer_includes_moneyline(self):
+        bundle = _build_dream_bundle(_dream_soccer_pred())
+        assert bundle is not None
+        picks = [leg["pick"] for leg in bundle["legs"]]
+        assert any("Victoria" in p for p in picks)
+
+    def test_soccer_includes_totals(self):
+        # over_2_5=55 → should include Over 2.5
+        bundle = _build_dream_bundle(_dream_soccer_pred(over_2_5=55.0))
+        assert bundle is not None
+        picks = [leg["pick"] for leg in bundle["legs"]]
+        assert any("Over" in p for p in picks)
+
+    def test_soccer_includes_over35_when_high_prob(self):
+        # over_3_5=52 ≥ 50 → should prefer Over 3.5 over lower lines
+        bundle = _build_dream_bundle(_dream_soccer_pred(over_3_5=52.0, over_2_5=65.0))
+        assert bundle is not None
+        picks = [leg["pick"] for leg in bundle["legs"]]
+        assert "Over 3.5" in picks
+
+    def test_soccer_btts_excluded_for_blowout(self):
+        # home_win=85 ≥ 75 → BTTS should NOT be included (blowout story)
+        bundle = _build_dream_bundle(_dream_soccer_pred(home_win=85.0, btts=60.0))
+        assert bundle is not None
+        picks = [leg["pick"] for leg in bundle["legs"]]
+        assert not any("BTTS" in p for p in picks)
+
+    def test_soccer_btts_included_for_moderate_win(self):
+        # home_win=65 < 75, btts=55 ≥ 50 → BTTS should be included
+        bundle = _build_dream_bundle(_dream_soccer_pred(home_win=65.0, btts=55.0))
+        assert bundle is not None
+        picks = [leg["pick"] for leg in bundle["legs"]]
+        assert any("BTTS" in p for p in picks)
+
+    def test_soccer_draw_no_over35(self):
+        # Draw story should not include Over 3.5 even if prob is ≥ 50 %
+        bundle = _build_dream_bundle(
+            _dream_soccer_pred(home_win=30.0, away_win=20.0, draw=50.0,
+                                over_3_5=55.0, over_2_5=65.0)
+        )
+        assert bundle is not None
+        picks = [leg["pick"] for leg in bundle["legs"]]
+        assert "Over 3.5" not in picks
+
+    def test_no_contradictory_moneylines(self):
+        bundle = _build_dream_bundle(_dream_soccer_pred())
+        assert bundle is not None
+        ml_picks = [leg for leg in bundle["legs"] if leg["market_type"] == "moneyline"]
+        pick_names = [l["pick"] for l in ml_picks]
+        # Should not contain both home-win and away-win
+        has_home = any("Liverpool" in p for p in pick_names)
+        has_away = any("Arsenal" in p for p in pick_names)
+        assert not (has_home and has_away)
+
+    def test_no_duplicate_picks(self):
+        bundle = _build_dream_bundle(_dream_soccer_pred())
+        assert bundle is not None
+        picks = [leg["pick"] for leg in bundle["legs"]]
+        assert len(picks) == len(set(picks))
+
+    def test_nba_includes_totals(self):
+        bundle = _build_dream_bundle(_dream_nba_pred())
+        assert bundle is not None
+        picks = [leg["pick"] for leg in bundle["legs"]]
+        assert any("Over" in p or "Under" in p for p in picks)
+
+    def test_nba_picks_best_totals_side(self):
+        # over_prob=58 > under_prob=42 → should pick Over
+        bundle = _build_dream_bundle(_dream_nba_pred())
+        assert bundle is not None
+        picks = [leg["pick"] for leg in bundle["legs"]]
+        assert any("Over" in p for p in picks)
+
+    def test_mlb_run_line_coherent_direction(self):
+        # fav_side="home", winner_direction=home → run line should be included
+        bundle = _build_dream_bundle(_dream_mlb_pred())
+        assert bundle is not None
+        picks = [leg["pick"] for leg in bundle["legs"]]
+        assert any("-1.5" in p for p in picks)
+
+    def test_mlb_run_line_not_included_when_misaligned(self):
+        # fav_side="home" but away team is favored → run line should NOT be included
+        pred = _dream_mlb_pred(home_win=35.0, away_win=65.0)
+        pred["run_line"] = {"fav_side": "home", "cover_prob": 57.0}
+        bundle = _build_dream_bundle(pred)
+        if bundle is not None:
+            picks = [leg["pick"] for leg in bundle["legs"]]
+            # If Yankees -1.5 (home run line) is included, that contradicts away win story
+            assert "Yankees -1.5" not in picks
+
+    def test_bundle_prob_calculated_correctly(self):
+        bundle = _build_dream_bundle(_dream_soccer_pred())
+        assert bundle is not None
+        expected = 1.0
+        for leg in bundle["legs"]:
+            expected *= leg["prob"] / 100.0
+        assert abs(bundle["bundle_prob"] - round(expected * 100, 1)) < 0.01
+
+    def test_returns_none_for_empty_candidates(self):
+        pred = {
+            "sport": "⚽ Soccer",
+            "home": "A",
+            "away": "B",
+            "home_win": 0,
+            "away_win": 0,
+            "draw": 0,
+            "over_1_5": 0,
+            "over_2_5": 0,
+            "over_3_5": 0,
+            "btts": 0,
+        }
+        assert _build_dream_bundle(pred) is None
+
+
+class TestGenerateDreamParlay:
+    def test_returns_all_predictions(self):
+        preds = [_dream_soccer_pred() for _ in range(6)]
+        bundles = generate_dream_parlay(preds)
+        # All predictions should produce bundles (each is a valid soccer pred)
+        assert len(bundles) == 6
+
+    def test_no_hard_limit(self):
+        preds = [_dream_soccer_pred() for _ in range(10)]
+        bundles = generate_dream_parlay(preds)
+        assert len(bundles) == 10  # no 4-bundle cap
+
+    def test_max_bundles_respected_when_passed(self):
+        preds = [_dream_soccer_pred() for _ in range(10)]
+        bundles = generate_dream_parlay(preds, max_bundles=3)
+        assert len(bundles) <= 3
+
+    def test_sport_diversity_round_robin(self):
+        soccer_preds = [_dream_soccer_pred() for _ in range(3)]
+        nba_preds    = [_dream_nba_pred()    for _ in range(3)]
+        bundles = generate_dream_parlay(soccer_preds + nba_preds)
+        sports = [b["sport"] for b in bundles]
+        # Both sports should appear
+        assert any("soccer" in s or "football" in s for s in sports)
+        assert any("nba" in s for s in sports)
+
+    def test_returns_empty_for_no_predictions(self):
+        assert generate_dream_parlay([]) == []
+
+    def test_total_picks_at_least_three_across_bundles(self):
+        preds = [_dream_soccer_pred(), _dream_nba_pred(), _dream_mlb_pred()]
+        bundles = generate_dream_parlay(preds)
+        total_picks = sum(len(b["legs"]) for b in bundles)
+        assert total_picks >= 3
+
+
+class TestFormatParlayDream:
+    def test_returns_string(self):
+        bundle = _build_dream_bundle(_dream_soccer_pred())
+        text = format_parlay_dream([bundle])
+        assert isinstance(text, str)
+
+    def test_header_present(self):
+        text = format_parlay_dream([])
+        assert "PARLAY SOÑADOR" in text
+
+    def test_empty_bundles_shows_warning(self):
+        text = format_parlay_dream([])
+        assert "No hay suficientes" in text or "⚠️" in text
+
+    def test_shows_total_legs(self):
+        bundles = generate_dream_parlay([_dream_soccer_pred(), _dream_nba_pred()])
+        text = format_parlay_dream(bundles)
+        assert "Patas totales" in text
+
+    def test_shows_sport_breakdown(self):
+        bundles = generate_dream_parlay([_dream_soccer_pred(), _dream_nba_pred()])
+        text = format_parlay_dream(bundles)
+        assert "Deportes incluidos" in text
+
+    def test_shows_match_count(self):
+        bundles = generate_dream_parlay([_dream_soccer_pred(), _dream_nba_pred()])
+        text = format_parlay_dream(bundles)
+        assert "Partidos" in text
+
+    def test_parlay_id_included_when_provided(self):
+        bundle = _build_dream_bundle(_dream_soccer_pred())
+        text = format_parlay_dream([bundle], parlay_id="DREAM-001")
+        assert "DREAM-001" in text
+
+    def test_responsible_gambling_warning(self):
+        text = format_parlay_dream([_build_dream_bundle(_dream_soccer_pred())])
+        assert "riesgo" in text.lower()
