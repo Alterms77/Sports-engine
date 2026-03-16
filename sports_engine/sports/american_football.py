@@ -147,6 +147,23 @@ def _fetch_espn_stats(team_name: str) -> dict:
         return {}
 
 
+def _fetch_stats(team_name: str) -> dict:
+    """
+    Fetch NFL team stats, preferring Sportradar when configured.
+
+    Falls back to ESPN if Sportradar is unavailable or returns no data.
+    """
+    try:
+        from api.sportradar import get_nfl_team_stats, is_available
+        if is_available():
+            sr = get_nfl_team_stats(team_name)
+            if sr:
+                return sr
+    except Exception as exc:
+        logger.debug("Sportradar NFL unavailable for '%s': %s", team_name, exc)
+    return _fetch_espn_stats(team_name)
+
+
 def _extract_ppg(stats: dict, fallback: float) -> float:
     for key in ("ppg", "pointsPerGame", "avgPoints", "points", "totalPointsPerGame"):
         if key in stats:
@@ -185,8 +202,8 @@ def predict_game(home_name: str, away_name: str) -> dict:
     Fetches live season stats from ESPN when available; falls back to
     league averages (neutral game prediction) otherwise.
     """
-    home_stats = _fetch_espn_stats(home_name)
-    away_stats = _fetch_espn_stats(away_name)
+    home_stats = _fetch_stats(home_name)
+    away_stats = _fetch_stats(away_name)
     live = bool(home_stats or away_stats)
 
     home_ppg = _extract_ppg(home_stats, NFL_AVG_PPG)
@@ -194,14 +211,28 @@ def predict_game(home_name: str, away_name: str) -> dict:
     away_ppg = _extract_ppg(away_stats, NFL_AVG_PPG)
     away_oppg = _extract_oppg(away_stats, NFL_AVG_PPG)
 
-    league_avg = (home_ppg + away_ppg) / 2
+    # Use the fixed league average so strengths are measured against the
+    # full NFL, not just these two teams.
+    league_avg = NFL_AVG_PPG
 
     home_off = home_ppg - league_avg
     home_def = league_avg - home_oppg
     away_off = away_ppg - league_avg
     away_def = league_avg - away_oppg
 
-    expected_margin = (home_off + home_def) - (away_off + away_def) + NFL_HOME_ADV
+    # Win-record quality adjustment: win% difference shifts expected margin.
+    # Coefficient 0.35 < NBA's 0.40 because NFL outcomes carry more variance
+    # (σ = 14.1 vs 12.2), so win% is a slightly noisier quality signal.
+    # A 50 pp win-rate gap shifts margin by ~2.5 pts (0.50 × 14.1 × 0.35).
+    home_win_pct = home_stats.get("win_pct", 0.5)
+    away_win_pct = away_stats.get("win_pct", 0.5)
+    win_quality_adj = (home_win_pct - away_win_pct) * NFL_SIGMA * 0.35
+
+    expected_margin = (
+        (home_off + home_def) - (away_off + away_def)
+        + NFL_HOME_ADV
+        + win_quality_adj
+    )
 
     home_win_prob = round(_normal_cdf(expected_margin / NFL_SIGMA) * 100, 1)
     away_win_prob = round(100 - home_win_prob, 1)
@@ -248,6 +279,8 @@ def predict_game(home_name: str, away_name: str) -> dict:
         "home_oppg": round(home_oppg, 1),
         "away_ppg": round(away_ppg, 1),
         "away_oppg": round(away_oppg, 1),
+        "home_win_pct": round(home_win_pct, 3),
+        "away_win_pct": round(away_win_pct, 3),
         "quarter_projections": quarters,
         "player_props": player_props,
     }

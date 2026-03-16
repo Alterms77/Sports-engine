@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import csv
+import asyncio as _asyncio
 import logging
 import threading
 import time as _time
@@ -20,9 +21,10 @@ for _p in [_SPORTS_ENGINE_DIR, _REPO_ROOT]:
 # Load .env if present (local development)
 load_dotenv()
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     MessageHandler,
     filters,
@@ -478,8 +480,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📡 *Datos en vivo (SofaScore / TheSportsDB / ESPN)*\n"
         "  `/live [deporte]` · `/scores` · `/liveteam EQUIPO` · `/tabla LIGA`\n\n"
         "📅 `/today` — partidos de hoy\n"
-        "❓ `/help` — ayuda detallada",
+        "❓ `/help` — ayuda detallada\n"
+        "🎛 `/menu` — menú con botones",
         parse_mode="Markdown",
+    )
+    # Show the interactive button menu right after the welcome message
+    await update.message.reply_text(
+        "🎛 *Menú rápido — toca un botón para comenzar:*",
+        parse_mode="Markdown",
+        reply_markup=_build_inline_keyboard(),
     )
 
 
@@ -1389,6 +1398,41 @@ async def tabla(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===============================
 
 
+async def _predict_one(m: dict, semaphore: "_asyncio.Semaphore") -> dict | None:
+    """
+    Run a single match prediction in a thread-pool executor with a per-match
+    timeout.  Wrapped in a semaphore to cap concurrent ESPN/API calls.
+    """
+    async with semaphore:
+        sport  = m.get("sport", "soccer").lower()
+        home   = m["home"]
+        away   = m["away"]
+        league = m.get("league", "default")
+
+        def _sync_predict():
+            if sport == "nba":
+                return _bball.predict_game(home, away)
+            if sport == "nfl":
+                return _nfl.predict_game(home, away)
+            if sport == "mlb":
+                return _baseball.predict_game(home, away)
+            return get_full_prediction(home, away, league=league, fetch_live=True)
+
+        loop = _asyncio.get_event_loop()
+        try:
+            pred = await _asyncio.wait_for(
+                loop.run_in_executor(None, _sync_predict),
+                timeout=15.0,
+            )
+            pred.setdefault("league", league)
+            return pred
+        except _asyncio.TimeoutError:
+            logger.warning("Parlay: timeout %s vs %s (%s)", home, away, sport)
+        except Exception as exc:
+            logger.warning("Parlay: skip %s vs %s (%s): %s", home, away, sport, exc)
+        return None
+
+
 async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generate parlay recommendations from today's matches (Soccer + NBA/NFL/MLB)."""
     await update.message.reply_text(
@@ -1408,29 +1452,13 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Run predictions for every match using the correct sport module ────
-    predictions = []
-    for m in matches:
-        sport = m.get("sport", "soccer").lower()
-        home, away = m["home"], m["away"]
-        try:
-            if sport == "nba":
-                pred = _bball.predict_game(home, away)
-            elif sport == "nfl":
-                pred = _nfl.predict_game(home, away)
-            elif sport == "mlb":
-                pred = _baseball.predict_game(home, away)
-            else:
-                # Soccer / football
-                pred = get_full_prediction(
-                    home, away,
-                    league=m.get("league", "default"),
-                    fetch_live=True,
-                )
-            pred.setdefault("league", m.get("league", ""))
-            predictions.append(pred)
-        except Exception as e:
-            logger.warning("Parlay: skip %s vs %s (%s): %s", home, away, sport, e)
+    # ── Run predictions concurrently with per-match 15 s timeout ─────────
+    semaphore = _asyncio.Semaphore(5)   # max 5 concurrent ESPN/API calls
+    preds = await _asyncio.gather(
+        *[_predict_one(m, semaphore) for m in matches],
+        return_exceptions=False,
+    )
+    predictions = [p for p in preds if p is not None]
 
     if not predictions:
         await update.message.reply_text(
@@ -1450,8 +1478,8 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     legs, report, _excluded = generate_parlay_legs(
         predictions,
-        min_confidence="ALTA",
-        min_prob=75.0,
+        min_confidence="MEDIA",
+        min_prob=65.0,
         cal_stats=cal_stats,
     )
 
@@ -1522,28 +1550,13 @@ async def parlay_safe_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    # ── Run predictions ───────────────────────────────────────────────────
-    predictions = []
-    for m in matches:
-        sport = m.get("sport", "soccer").lower()
-        home, away = m["home"], m["away"]
-        try:
-            if sport == "nba":
-                pred = _bball.predict_game(home, away)
-            elif sport == "nfl":
-                pred = _nfl.predict_game(home, away)
-            elif sport == "mlb":
-                pred = _baseball.predict_game(home, away)
-            else:
-                pred = get_full_prediction(
-                    home, away,
-                    league=m.get("league", "default"),
-                    fetch_live=True,
-                )
-            pred.setdefault("league", m.get("league", ""))
-            predictions.append(pred)
-        except Exception as e:
-            logger.warning("ParlayS: skip %s vs %s (%s): %s", home, away, sport, e)
+    # ── Run predictions concurrently with per-match 15 s timeout ─────────
+    semaphore = _asyncio.Semaphore(5)
+    preds = await _asyncio.gather(
+        *[_predict_one(m, semaphore) for m in matches],
+        return_exceptions=False,
+    )
+    predictions = [p for p in preds if p is not None]
 
     if not predictions:
         await update.message.reply_text(
@@ -1617,15 +1630,15 @@ async def photo_parlay_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         legs = parse_parlay_text(caption)
         if not legs:
             await update.message.reply_text(
-                "❌ No pude detectar patas de parlay en el caption\\.\n\n"
+                "❌ No pude detectar patas de parlay en el caption.\n\n"
                 + USAGE_TEXT,
-                parse_mode="MarkdownV2",
+                parse_mode="Markdown",
             )
             return
 
         analysis = analyze_parlay(legs)
         await update.message.reply_text(
-            format_parlay_analysis(analysis), parse_mode="MarkdownV2"
+            format_parlay_analysis(analysis), parse_mode="Markdown"
         )
     except Exception as exc:
         logger.exception("Error en análisis de parlay (foto)")
@@ -1649,7 +1662,7 @@ async def checkparlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         from core.parlay_analyzer import USAGE_TEXT
         await update.message.reply_text(
             "❌ Uso: `/checkparlay <patas del parlay>`\n\n" + USAGE_TEXT,
-            parse_mode="MarkdownV2",
+            parse_mode="Markdown",
         )
         return
 
@@ -1666,14 +1679,14 @@ async def checkparlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         legs = parse_parlay_text(raw_text)
         if not legs:
             await update.message.reply_text(
-                "❌ No pude parsear las patas del parlay\\.\n\n" + USAGE_TEXT,
-                parse_mode="MarkdownV2",
+                "❌ No pude parsear las patas del parlay.\n\n" + USAGE_TEXT,
+                parse_mode="Markdown",
             )
             return
 
         analysis = analyze_parlay(legs)
         await update.message.reply_text(
-            format_parlay_analysis(analysis), parse_mode="MarkdownV2"
+            format_parlay_analysis(analysis), parse_mode="Markdown"
         )
     except Exception as exc:
         logger.exception("Error en /checkparlay")
@@ -1694,16 +1707,20 @@ async def resultado_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     - ``X`` = cancelado / void
 
     If ``<id>`` is omitted the most recently generated parlay is used.
+    Also accepts external platform IDs (e.g. PlayDoIt, Caliente, Bet365).
 
     Examples
     --------
     /resultado P240315-2 WLW
-    /resultado WWL        ← uses the last parlay
+    /resultado PLAYDOIT-12345 WLW    ← external platform ID
+    /resultado BET365-ABC123 LLW     ← external platform ID
+    /resultado WWL                   ← uses the last parlay
     """
     if not context.args:
         await update.message.reply_text(
             "❌ Uso: `/resultado [<id>] <WLWWL>`\n\n"
-            "Ejemplo: `/resultado P240315-2 WLW`\n"
+            "Ejemplo interno: `/resultado P240315-2 WLW`\n"
+            "Ejemplo externo: `/resultado PLAYDOIT-12345 WLW`\n"
             "O para el último parlay: `/resultado WWL`\n\n"
             "W = Ganó · L = Perdió · X = Cancelado",
             parse_mode="Markdown",
@@ -1715,13 +1732,20 @@ async def resultado_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         get_last_parlay_id,
         get_num_legs_for_parlay,
         format_result_confirmation,
-        PARLAY_ID_RE,
+        save_external_parlay,
     )
 
     args = context.args
 
-    # Determine whether first arg is a parlay ID or result string
-    if len(args) >= 2 and PARLAY_ID_RE.match(args[0]):
+    # Determine whether the first arg is a parlay ID or a results string.
+    # Rule: if the first arg contains any character outside W/L/X it is an ID
+    # (handles both internal "P240315-2" and external "PLAYDOIT-12345").
+    _RESULT_CHARS = frozenset("WLX")
+    first_is_id = len(args) >= 2 and not all(
+        c in _RESULT_CHARS for c in args[0].upper()
+    )
+
+    if first_is_id:
         parlay_id   = args[0].upper()
         results_str = "".join(args[1:]).upper()
     else:
@@ -1764,12 +1788,22 @@ async def resultado_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     outcome = record_results(parlay_id, results_list)
 
     if not outcome["found"]:
-        await update.message.reply_text(
-            f"❌ Parlay `{parlay_id}` no encontrado.\n"
-            "Usa `/historial` para ver los IDs guardados.",
-            parse_mode="Markdown",
-        )
-        return
+        # For external platform IDs: create a lightweight placeholder and try again
+        if first_is_id:
+            try:
+                outcome = save_external_parlay(parlay_id, results_list)
+            except Exception as exc:
+                logger.warning(
+                    "resultado_command: could not save external parlay %s: %s",
+                    parlay_id, exc,
+                )
+        if not outcome["found"]:
+            await update.message.reply_text(
+                f"❌ Parlay `{parlay_id}` no encontrado.\n"
+                "Usa `/historial` para ver los IDs guardados.",
+                parse_mode="Markdown",
+            )
+            return
 
     await update.message.reply_text(
         format_result_confirmation(outcome), parse_mode="Markdown"
@@ -2838,14 +2872,41 @@ async def rl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def autoscan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /autoscan — Show the auto-scanner status and configuration.
+    /autoscan — Show the auto-scanner status and trigger an immediate scan cycle.
 
-    Displays whether ODDS_API_KEY is configured, scan interval, EV threshold,
-    remaining Odds API quota, and dedup cache size.
+    Displays configuration (ODDS_API_KEY, interval, EV threshold, quota) and
+    then runs ``scan_once()`` to fetch live bookmaker odds right now, detect
+    arbitrage / value bets / steam moves, and return any alerts directly to
+    this chat.
     """
     try:
-        from core.auto_scanner import status_summary
+        from core.auto_scanner import status_summary, scan_once
+        # 1. Show status first
         await update.message.reply_text(status_summary(), parse_mode="Markdown")
+
+        # 2. Trigger an immediate scan cycle
+        await update.message.reply_text("🔍 Ejecutando escaneo ahora…")
+        alerts = await scan_once()
+
+        if not alerts:
+            await update.message.reply_text(
+                "✅ Escaneo completado — sin alertas nuevas en este ciclo.\n"
+                "_El scanner automático enviará alertas al canal configurado "
+                "cada vez que detecte oportunidades._",
+                parse_mode="Markdown",
+            )
+        else:
+            await update.message.reply_text(
+                f"📊 *{len(alerts)} alerta(s) encontrada(s):*",
+                parse_mode="Markdown",
+            )
+            for alert in alerts:
+                try:
+                    await update.message.reply_text(
+                        alert.message, parse_mode="Markdown"
+                    )
+                except Exception:
+                    await update.message.reply_text(f"⚠️ {alert.summary}")
     except Exception as exc:
         logger.exception("Error en /autoscan")
         await update.message.reply_text(f"❌ Error: {exc}")
@@ -2987,6 +3048,181 @@ async def send_daily_alerts(context: ContextTypes.DEFAULT_TYPE):
             logger.warning("Could not send daily alerts: %s", exc)
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 🎰 INLINE KEYBOARD MENU
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Each entry: (button_label, callback_data)
+# callback_data must be unique and ≤ 64 bytes (Telegram limit).
+_MENU_SECTIONS = [
+    # Section header (displayed as a disabled text row, full width)
+    ("── 🎯 PREDICCIONES ──", None),
+    ("⚽ Predict",   "cmd_predict"),
+    ("🏀 NBA",       "cmd_nba"),
+    ("⚾ MLB",       "cmd_mlb"),
+    ("🏈 NFL",       "cmd_nfl"),
+    ("🎾 Tennis",    "cmd_tennis"),
+
+    ("── 🎰 PARLAYS ──", None),
+    ("🎰 Parlay",        "cmd_parlay"),
+    ("🛡 Parlay Safe",   "cmd_parlay_safe"),
+    ("📸 Check Parlay",  "cmd_checkparlay"),
+
+    ("── 📊 ESTADÍSTICAS ──", None),
+    ("📊 Estadísticas",  "cmd_estadisticas"),
+    ("📈 Historial",     "cmd_historial"),
+    ("📅 Today",         "cmd_today"),
+
+    ("── 🛰 SCANNER ──", None),
+    ("🛰 Autoscan",  "cmd_autoscan"),
+    ("🔍 Scanner",   "cmd_scanner"),
+
+    ("── 📡 DATOS EN VIVO ──", None),
+    ("📡 Live",     "cmd_live"),
+    ("📺 Scores",   "cmd_scores"),
+    ("🏆 Tabla",    "cmd_tabla"),
+]
+
+# Map callback_data → the async handler function name
+_MENU_DISPATCH: dict[str, str] = {
+    "cmd_predict":      "predict",
+    "cmd_nba":          "nba",
+    "cmd_mlb":          "mlb",
+    "cmd_nfl":          "nfl",
+    "cmd_tennis":       "tennis",
+    "cmd_parlay":       "parlay_command",
+    "cmd_parlay_safe":  "parlay_safe_command",
+    "cmd_checkparlay":  "checkparlay_command",
+    "cmd_estadisticas": "estadisticas_command",
+    "cmd_historial":    "historial_command",
+    "cmd_today":        "today",
+    "cmd_autoscan":     "autoscan_command",
+    "cmd_scanner":      "scanner_command",
+    "cmd_live":         "live",
+    "cmd_scores":       "scores",
+    "cmd_tabla":        "tabla",
+}
+
+
+def _build_inline_keyboard() -> InlineKeyboardMarkup:
+    """
+    Build the full inline keyboard.
+
+    Section headers (entries with ``callback_data=None``) appear as a single
+    full-width disabled-looking button labelled with the section title.
+    All other entries are laid out two per row.
+    """
+    rows: list[list[InlineKeyboardButton]] = []
+    pair: list[InlineKeyboardButton] = []
+
+    for label, cb in _MENU_SECTIONS:
+        if cb is None:
+            # Flush any pending pair first
+            if pair:
+                rows.append(pair)
+                pair = []
+            # Section header — full-width, uses a no-op callback so Telegram
+            # doesn't complain about a button with no action.
+            rows.append([InlineKeyboardButton(label, callback_data="noop")])
+        else:
+            pair.append(InlineKeyboardButton(label, callback_data=cb))
+            if len(pair) == 2:
+                rows.append(pair)
+                pair = []
+
+    if pair:          # flush last odd button
+        rows.append(pair)
+
+    return InlineKeyboardMarkup(rows)
+
+
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /menu — Show the interactive inline keyboard.
+
+    Pressing any button triggers the corresponding bot command in-chat so
+    the user never has to type a slash command manually.
+    """
+    await update.message.reply_text(
+        "🤖 *Sports Engine — Menú Principal*\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "Elige una opción:",
+        parse_mode="Markdown",
+        reply_markup=_build_inline_keyboard(),
+    )
+
+
+async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle all inline-keyboard button presses.
+
+    Each button's ``callback_data`` is looked up in ``_MENU_DISPATCH`` to
+    find the handler function, which is then called directly — exactly as if
+    the user had sent the corresponding slash command.
+    """
+    query = update.callback_query
+    await query.answer()   # dismiss the Telegram "loading" spinner
+
+    cb = query.data
+    if cb == "noop":
+        # Section-header button — nothing to do
+        return
+
+    # Commands that need arguments show a usage hint instead of running blind
+    _NEEDS_ARGS = {
+        "cmd_predict":     "⚽ Uso: `/predict LOCAL vs VISITANTE`",
+        "cmd_nba":         "🏀 Uso: `/nba LOCAL vs VISITANTE`",
+        "cmd_mlb":         "⚾ Uso: `/mlb LOCAL vs VISITANTE`",
+        "cmd_nfl":         "🏈 Uso: `/nfl LOCAL vs VISITANTE`",
+        "cmd_tennis":      "🎾 Uso: `/tennis J1 vs J2 [clay/grass/hard]`",
+        "cmd_checkparlay": "📸 Uso: `/checkparlay <patas del parlay>`\n"
+                           "O envía una *foto* con caption describiendo las patas.",
+        "cmd_tabla":       "🏆 Uso: `/tabla <liga>`\nEj: `/tabla Premier League`",
+    }
+
+    if cb in _NEEDS_ARGS:
+        await query.message.reply_text(
+            _NEEDS_ARGS[cb], parse_mode="Markdown"
+        )
+        return
+
+    fn_name = _MENU_DISPATCH.get(cb)
+    if not fn_name:
+        await query.message.reply_text("❌ Opción no reconocida.")
+        return
+
+    # Resolve the handler function from the global namespace of this module
+    handler_fn = globals().get(fn_name)
+    if not callable(handler_fn):
+        await query.message.reply_text(f"❌ Comando `{fn_name}` no disponible.", parse_mode="Markdown")
+        return
+
+    # Synthesise a fake Update so the handler receives a proper message object
+    # (callback queries have a message, not a new message, so we wrap it)
+    class _FakeUpdate:
+        """Thin shim that adapts a CallbackQuery message to the Update interface
+        expected by command handlers (which call ``update.message.reply_text``).
+
+        ``query`` is passed explicitly (not captured from enclosing scope) to
+        keep the dependency visible and make the class easier to reason about.
+        """
+        def __init__(self, msg, q):
+            self.message        = msg
+            self.effective_user = q.from_user
+            self._query         = q
+
+        def __getattr__(self, item):
+            return getattr(self._query, item)
+
+    fake = _FakeUpdate(query.message, query)
+    try:
+        await handler_fn(fake, context)
+    except Exception as exc:
+        logger.exception("menu_callback: error dispatching %s", fn_name)
+        await query.message.reply_text(f"❌ Error: {exc}")
+
+
 def main():
     global _last_csv_update
     logger.info("🚀 Iniciando Sports Engine Bot…")
@@ -3008,6 +3244,7 @@ def main():
 
     # ── Football/Soccer commands ──
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("menu",  menu_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("today", today))
     app.add_handler(CommandHandler("predict", predict))
@@ -3023,6 +3260,8 @@ def main():
     app.add_handler(CommandHandler("estadisticas",  estadisticas_command))
     # PHOTO handler must come after CommandHandlers
     app.add_handler(MessageHandler(filters.PHOTO, photo_parlay_handler))
+    # Inline keyboard callback handler (menu buttons)
+    app.add_handler(CallbackQueryHandler(menu_callback))
 
     # ── Advanced analytics commands ──
     app.add_handler(CommandHandler("form",    form_command))

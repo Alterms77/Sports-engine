@@ -150,6 +150,26 @@ def _fetch_espn_stats(team_name: str) -> dict:
         return {}
 
 
+def _fetch_stats(team_name: str) -> dict:
+    """
+    Fetch NBA team stats, preferring Sportradar when configured.
+
+    Sportradar provides Offensive Rating / Defensive Rating / Pace
+    (per-100-possession metrics), which are significantly more accurate
+    predictors than raw PPG/OPPG season averages from ESPN.
+    Falls back to ESPN if Sportradar is unavailable or returns no data.
+    """
+    try:
+        from api.sportradar import get_nba_team_stats, is_available
+        if is_available():
+            sr = get_nba_team_stats(team_name)
+            if sr:
+                return sr
+    except Exception as exc:
+        logger.debug("Sportradar NBA unavailable for '%s': %s", team_name, exc)
+    return _fetch_espn_stats(team_name)
+
+
 def _extract_ppg(stats: dict, fallback: float) -> float:
     """Extract points-per-game from ESPN stats dict, or use fallback."""
     for key in ("ppg", "pointsPerGame", "avgPoints", "points"):
@@ -204,8 +224,8 @@ def predict_game(home_name: str, away_name: str) -> dict:
     live_data                      (bool — True when ESPN data was used)
     home_record, away_record       (season W-L strings if available)
     """
-    home_stats = _fetch_espn_stats(home_name)
-    away_stats = _fetch_espn_stats(away_name)
+    home_stats = _fetch_stats(home_name)
+    away_stats = _fetch_stats(away_name)
     live = bool(home_stats or away_stats)
 
     home_ppg = _extract_ppg(home_stats, NBA_AVG_PPG)
@@ -213,15 +233,64 @@ def predict_game(home_name: str, away_name: str) -> dict:
     away_ppg = _extract_ppg(away_stats, NBA_AVG_PPG)
     away_oppg = _extract_oppg(away_stats, NBA_AVG_OPPG)
 
-    league_avg = (home_ppg + away_ppg) / 2
+    # ── Choose prediction model based on data availability ───────────────
+    #
+    # When Sportradar OffRtg/DefRtg/pace data is present, use the
+    # possession-efficiency model: it is the standard approach in pro NBA
+    # analytics and far more accurate than raw PPG/OPPG.
+    #
+    # Fallback: use the PPG/OPPG Gaussian model (same as before Sportradar).
 
-    # Offensive and defensive strengths relative to league average
-    home_off = home_ppg - league_avg       # positive = above-average offense
-    home_def = league_avg - home_oppg      # positive = above-average defense
-    away_off = away_ppg - league_avg
-    away_def = league_avg - away_oppg
+    home_off_rtg = home_stats.get("off_rtg", 0.0)
+    away_off_rtg = away_stats.get("off_rtg", 0.0)
+    home_def_rtg = home_stats.get("def_rtg", 0.0)
+    away_def_rtg = away_stats.get("def_rtg", 0.0)
+    home_pace    = home_stats.get("pace", NBA_AVG_PACE)
+    away_pace    = away_stats.get("pace", NBA_AVG_PACE)
 
-    expected_margin = (home_off + home_def) - (away_off + away_def) + NBA_HOME_ADV
+    if home_off_rtg and away_off_rtg and home_def_rtg and away_def_rtg:
+        # Possession-efficiency model (preferred when Sportradar data available)
+        #
+        # Net rating = OffRtg − DefRtg (quality measure per 100 possessions)
+        # Expected point margin ≈ Δnet_rtg × avg_pace / 100 + home_advantage
+        #
+        # avg_pace/100 converts from per-100-possession to per-game scale.
+        # Adding home advantage on top reflects the empirical HCA observed
+        # in regular-season games.
+        avg_pace = (home_pace + away_pace) / 2.0
+        home_net = home_off_rtg - home_def_rtg
+        away_net = away_off_rtg - away_def_rtg
+
+        # Win-record quality adjustment (same as fallback model)
+        home_win_pct = home_stats.get("win_pct", 0.5)
+        away_win_pct = away_stats.get("win_pct", 0.5)
+        win_quality_adj = (home_win_pct - away_win_pct) * NBA_SIGMA * 0.4
+
+        expected_margin = (
+            (home_net - away_net) * (avg_pace / 100.0)
+            + NBA_HOME_ADV
+            + win_quality_adj
+        )
+    else:
+        # Fallback: season PPG/OPPG Gaussian model
+        league_avg = NBA_AVG_PPG
+        home_off = home_ppg - league_avg
+        home_def = league_avg - home_oppg
+        away_off = away_ppg - league_avg
+        away_def = league_avg - away_oppg
+
+        home_win_pct = home_stats.get("win_pct", 0.5)
+        away_win_pct = away_stats.get("win_pct", 0.5)
+        # Win-record quality adjustment: a 50 pp win-rate gap shifts the
+        # expected margin by ~2.4 pts (0.50 × 12.2 × 0.4), roughly 20 % of
+        # the average home-court advantage.
+        win_quality_adj = (home_win_pct - away_win_pct) * NBA_SIGMA * 0.4
+
+        expected_margin = (
+            (home_off + home_def) - (away_off + away_def)
+            + NBA_HOME_ADV
+            + win_quality_adj
+        )
 
     home_win_prob = round(_normal_cdf(expected_margin / NBA_SIGMA) * 100, 1)
     away_win_prob = round(100 - home_win_prob, 1)
@@ -270,6 +339,13 @@ def predict_game(home_name: str, away_name: str) -> dict:
         "home_oppg": round(home_oppg, 1),
         "away_ppg": round(away_ppg, 1),
         "away_oppg": round(away_oppg, 1),
+        "home_win_pct": round(home_stats.get("win_pct", 0.5), 3),
+        "away_win_pct": round(away_stats.get("win_pct", 0.5), 3),
+        # Advanced metrics (present when Sportradar data is available)
+        "home_off_rtg": home_stats.get("off_rtg"),
+        "home_def_rtg": home_stats.get("def_rtg"),
+        "away_off_rtg": away_stats.get("off_rtg"),
+        "away_def_rtg": away_stats.get("def_rtg"),
         "quarter_projections": quarters,
         "player_props": player_props,
         "game_totals": game_totals,

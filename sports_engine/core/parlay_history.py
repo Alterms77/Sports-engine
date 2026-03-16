@@ -86,9 +86,11 @@ _CAL_MIN, _CAL_MAX = 0.60, 1.40
 # Override via PARLAY_EWMA_DECAY env var (e.g. "0.90" for faster adaptation).
 EWMA_DECAY: float = float(os.environ.get("PARLAY_EWMA_DECAY", "0.95"))
 
-# Compiled regex for validating / matching parlay IDs (e.g. "P240315-2").
-# Exported so callers (bot.py) can reuse it without duplicating the pattern.
-PARLAY_ID_RE = _re.compile(r'^P\d{6}-\d+$', _re.IGNORECASE)
+# Compiled regex for validating / matching parlay IDs.
+# Accepts both internal IDs (e.g. "P240315-2") and external platform IDs
+# (e.g. "PLAYDOIT-12345", "BET365-ABC123", "CALIENTE_XYZ").
+# Any alphanumeric string of 2-40 chars with optional dashes/underscores.
+PARLAY_ID_RE = _re.compile(r'^[A-Z0-9][A-Z0-9_-]{1,39}$', _re.IGNORECASE)
 
 # ── Schema ─────────────────────────────────────────────────────────────────────
 _DDL = """
@@ -417,13 +419,78 @@ def record_results(parlay_id: str, results: list) -> dict:
                 }
                 for r in leg_rows
             ]
-            return {
-                "found":    True,
-                "id":       real_pid,
-                "legs":     legs,
-                "overall":  overall,
-                "num_legs": len(leg_rows),
-            }
+
+    # Auto-calibration: compute updated stats right after writing results.
+    # This is a read-only operation so it's safe outside the lock.
+    try:
+        cal_stats = get_calibration_stats()
+        overall_cal = cal_stats.get("overall", {})
+        n_cal = overall_cal.get("n", 0)
+        cal_factor = overall_cal.get("calibration", 1.0)
+        bias = overall_cal.get("bias", "OK")
+    except Exception:
+        n_cal, cal_factor, bias = 0, 1.0, "OK"
+
+    return {
+        "found":       True,
+        "id":          real_pid,
+        "legs":        legs,
+        "overall":     overall,
+        "num_legs":    len(leg_rows),
+        # Auto-calibration snapshot — shown to user in /resultado confirmation
+        "cal_n":       n_cal,
+        "cal_factor":  round(cal_factor, 3),
+        "cal_bias":    bias,
+    }
+
+
+def save_external_parlay(external_id: str, results: list) -> dict:
+    """
+    Create a lightweight placeholder parlay for an external platform ID
+    (e.g. "PLAYDOIT-12345") and immediately record its results.
+
+    Used when a user runs ``/resultado PLAYDOIT-12345 WLW`` for a parlay
+    that was placed on an external bookmaker.  The entry is stored with
+    tier="external" so calibration logic can later distinguish it from
+    internally generated parlays.
+
+    Parameters
+    ----------
+    external_id : any valid parlay ID string matching PARLAY_ID_RE.
+    results     : list of "W" / "L" / "X" strings, one per leg.
+
+    Returns
+    -------
+    dict from ``record_results`` — always has ``found=True`` on success.
+    """
+    _migrate_json_if_needed()
+    eid = external_id.strip().upper()
+    n_legs = len(results)
+
+    with _LOCK:
+        with _db() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM parlays WHERE UPPER(id) = ?", (eid,)
+            ).fetchone()
+
+            if not existing:
+                now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                conn.execute(
+                    "INSERT INTO parlays(id, created_at, tier, combined_prob, parlay_result) "
+                    "VALUES (?,?,?,?,?)",
+                    (eid, now, "external", None, None),
+                )
+                for i in range(n_legs):
+                    conn.execute(
+                        "INSERT INTO parlay_legs"
+                        "(parlay_id, leg_order, match_name, pick, market_type,"
+                        " sport, league, sport_emoji, predicted_prob, result) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                        (eid, i, f"Pata {i + 1} (externa)", "—", "external",
+                         "external", "", "🎲", None, None),
+                    )
+
+    return record_results(eid, results)
 
 
 def get_last_parlay_id() -> Optional[str]:
@@ -741,7 +808,11 @@ _TIER_EMOJI   = {"safe": "🟢", "balanced": "🟡", "risky": "🔴"}
 
 
 def format_result_confirmation(record: dict) -> str:
-    """Format a result-recording confirmation message for Telegram."""
+    """Format a result-recording confirmation message for Telegram.
+
+    Includes an auto-calibration status block so the user sees that
+    recording results immediately improves future predictions.
+    """
     pid    = record.get("id", "?")
     legs   = record.get("legs", [])
     ov     = record.get("overall")
@@ -761,8 +832,32 @@ def format_result_confirmation(record: dict) -> str:
         "",
         f"📊 Resultado del parlay: *{ov_str}*",
         "",
-        "_Gracias — los datos se usarán para mejorar futuras predicciones._",
     ]
+
+    # Auto-calibration status block
+    n_cal     = record.get("cal_n", 0)
+    cal_factor = record.get("cal_factor", 1.0)
+    bias      = record.get("cal_bias", "OK")
+
+    if n_cal > 0:
+        bias_icon = {"OVERCONFIDENT": "📉", "UNDERCONFIDENT": "📈"}.get(bias, "✅")
+        factor_pct = round((cal_factor - 1.0) * 100, 1)
+        factor_str = (
+            f"+{factor_pct}%" if factor_pct > 0
+            else f"{factor_pct}%" if factor_pct < 0
+            else "0%"
+        )
+        lines += [
+            "🔄 *Calibración actualizada automáticamente*",
+            f"  • Muestras en ventana: `{n_cal}`",
+            f"  • Ajuste: `{factor_str}` ({bias_icon} {bias})",
+            "_Las próximas predicciones usarán estos datos._",
+        ]
+    else:
+        lines.append(
+            "_Registra más resultados para activar la calibración automática._"
+        )
+
     return "\n".join(lines)
 
 

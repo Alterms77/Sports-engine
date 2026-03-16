@@ -43,17 +43,23 @@ _CONFIDENCE_RANK = {"ALTA": 2, "MEDIA": 1, "BAJA": 0}
 _MAX_SAME_MARKET = 2
 
 # ── Risk thresholds (0-1 scale) ────────────────────────────────────────────────
-RISK_THRESHOLD_DEFAULT = 0.35   # default /parlay
+RISK_THRESHOLD_DEFAULT = 0.45   # default /parlay (raised from 0.35 to allow more picks)
 RISK_THRESHOLD_SAFE    = 0.25   # /parlay_safe (more conservative)
 
 # Keep legacy name for test compatibility
 _HIGH_RISK_SCORE = RISK_THRESHOLD_DEFAULT
 
+# ── Calibration floor ─────────────────────────────────────────────────────────
+# Maximum downward adjustment allowed per calibration step (percentage points).
+# Prevents a "death spiral" where bad results push calibration so far down that
+# even good picks fall below min_prob.  See ``calibrate_prob_gated`` for usage.
+_CAL_FLOOR_MAX_REDUCTION = 15.0
+
 # ── Safe-mode clarity thresholds ─────────────────────────────────────────────
 # Minimum absolute probability of the best outcome (safe mode)
-MIN_PROB_SAFE_ABS = 62.0
+MIN_PROB_SAFE_ABS = 58.0   # lowered from 62.0
 # Minimum gap between best and second-best outcome (percentage points)
-MIN_SEP_SAFE      = 12.0
+MIN_SEP_SAFE      = 8.0    # lowered from 12.0
 # Draw allowed if its probability is at least this high
 MIN_DRAW_PROB     = 40.0
 
@@ -113,7 +119,14 @@ def score_risk_soccer(pred: dict) -> tuple:
       * No live data source: missing data flag
       * No market with strong probability (< 65 %): LOW_PROB
       * Very close draw probability (p_draw ≥ 30 % and < p_best + 10): COIN_FLIP
+
+    Circumstantial "soft" penalties (SHARP, NO_LIVE_DATA, LOW_CONF, LOW_PROB,
+    draw COIN_FLIP) are each capped at 0.25 to prevent over-stacking from
+    turning a borderline pick into a hard reject.  The primary probability-
+    quality checks (COIN_FLIP, LOW_SEPARATION) are not capped.
     """
+    _SOFT_CAP = 0.25   # per-factor cap for circumstantial penalties
+
     risk = 0.0
     reasons: list = []
 
@@ -122,6 +135,7 @@ def score_risk_soccer(pred: dict) -> tuple:
     dr = float(pred.get("draw") or 0.0)
     top_side = max(hw, aw)
 
+    # Primary quality checks — not capped (these are decisive)
     if top_side < 55.0:
         risk += 0.40
         reasons.append("COIN_FLIP")
@@ -133,16 +147,16 @@ def score_risk_soccer(pred: dict) -> tuple:
     if conf == "BAJA":
         return 1.0, ["LOW_CONF"]
     if conf == "MEDIA":
-        risk += 0.15
+        risk += min(0.15, _SOFT_CAP)
         reasons.append("LOW_CONF")
 
     sharp = pred.get("sharp", {})
     if sharp and sharp.get("is_sharp"):
-        risk += 0.25
+        risk += min(0.25, _SOFT_CAP)
         reasons.append("SHARP")
 
     if not pred.get("live_data", True):
-        risk += 0.10
+        risk += min(0.10, _SOFT_CAP)
         reasons.append("NO_LIVE_DATA")
 
     market_probs = [hw, aw, float(pred.get("over_1_5") or 0),
@@ -150,12 +164,12 @@ def score_risk_soccer(pred: dict) -> tuple:
                     float(pred.get("btts") or 0)]
     best_market = max(market_probs) if market_probs else 0
     if best_market < 65.0:
-        risk += 0.15
+        risk += min(0.15, _SOFT_CAP)
         reasons.append("LOW_PROB")
 
     # Draw "pollution": draw near top side makes it a 3-way coin flip
     if dr >= 30.0 and dr >= top_side - 10.0:
-        risk += 0.15
+        risk += min(0.15, _SOFT_CAP)
         reasons.append("COIN_FLIP")
 
     return min(risk, 1.0), reasons
@@ -168,7 +182,9 @@ def score_risk_nba(pred: dict) -> tuple:
     Returns (risk_score: float 0-1, reasons: list[str])
 
     Penalises:
-      * "Dirty zone" home_win 52-58 % (too close to call)
+      * True coin-flip (top_side < 52 %): HIGH_RISK
+      * "Dirty zone" 52-58 %: moderate penalty
+      * Borderline 58-62 %: small penalty
       * Missing live data from ESPN
       * BAJA/MEDIA confidence
       * Spread too narrow (if spread data available)
@@ -180,23 +196,26 @@ def score_risk_nba(pred: dict) -> tuple:
     if conf == "BAJA":
         return 1.0, ["LOW_CONF"]
     if conf == "MEDIA":
-        risk += 0.15
+        risk += 0.10
         reasons.append("LOW_CONF")
 
     hw = float(pred.get("home_win") or 0.0)
     aw = float(pred.get("away_win") or 0.0)
     top_side = max(hw, aw)
 
-    # "Dirty zone": margin too small to trust
-    if 52.0 <= top_side <= 58.0:
-        risk += 0.30
+    # Graduated probability penalty — no duplicate: only one block fires
+    if top_side < 52.0:
+        risk += 0.35
         reasons.append("COIN_FLIP")
-    elif top_side < 60.0:
-        risk += 0.15
-        reasons.append("LOW_SEPARATION")
+    elif top_side < 58.0:
+        risk += 0.25
+        reasons.append("COIN_FLIP")
+    elif top_side < 62.0:
+        risk += 0.10
+        reasons.append("LOW_PROB")
 
     if not pred.get("live_data", True):
-        risk += 0.20
+        risk += 0.10   # lowered from 0.20
         reasons.append("DATA_MISSING")
 
     # Spread narrow (if available): "spread_line" close to 0
@@ -205,21 +224,17 @@ def score_risk_nba(pred: dict) -> tuple:
         try:
             spread_val = abs(float(str(spread_str).replace("+", "").replace("−", "-")))
             if spread_val < 2.5:
-                risk += 0.15
+                risk += 0.10
                 reasons.append("SPREAD_NARROW")
         except (ValueError, TypeError):
             pass
-
-    if top_side < 62.0:
-        risk += 0.15
-        reasons.append("LOW_PROB")
 
     return min(risk, 1.0), reasons
 
 
 def score_risk_nfl(pred: dict) -> tuple:
     """
-    NFL-specific risk scoring (similar to NBA, slightly stricter on data).
+    NFL-specific risk scoring (similar to NBA, adjusted for football variance).
 
     Returns (risk_score: float 0-1, reasons: list[str])
     """
@@ -230,27 +245,27 @@ def score_risk_nfl(pred: dict) -> tuple:
     if conf == "BAJA":
         return 1.0, ["LOW_CONF"]
     if conf == "MEDIA":
-        risk += 0.15
+        risk += 0.10
         reasons.append("LOW_CONF")
 
     hw = float(pred.get("home_win") or 0.0)
     aw = float(pred.get("away_win") or 0.0)
     top_side = max(hw, aw)
 
-    if top_side < 55.0:
+    # Graduated probability penalty — single block, no duplicate
+    if top_side < 52.0:
         risk += 0.35
         reasons.append("COIN_FLIP")
+    elif top_side < 58.0:
+        risk += 0.25
+        reasons.append("COIN_FLIP")
     elif top_side < 62.0:
-        risk += 0.20
-        reasons.append("LOW_SEPARATION")
-
-    if not pred.get("live_data", True):
-        risk += 0.20
-        reasons.append("DATA_MISSING")
-
-    if top_side < 62.0:
         risk += 0.10
         reasons.append("LOW_PROB")
+
+    if not pred.get("live_data", True):
+        risk += 0.10   # lowered from 0.20
+        reasons.append("DATA_MISSING")
 
     return min(risk, 1.0), reasons
 
@@ -259,7 +274,7 @@ def score_risk_mlb(pred: dict) -> tuple:
     """
     MLB-specific risk scoring.
 
-    Extra penalisation when pitcher / ERA data is absent (DATA_MISSING).
+    Extra penalisation when ERA data is absent (DATA_MISSING).
 
     Returns (risk_score: float 0-1, reasons: list[str])
     """
@@ -270,27 +285,34 @@ def score_risk_mlb(pred: dict) -> tuple:
     if conf == "BAJA":
         return 1.0, ["LOW_CONF"]
     if conf == "MEDIA":
-        risk += 0.15
+        risk += 0.10
         reasons.append("LOW_CONF")
 
     hw = float(pred.get("home_win") or 0.0)
     aw = float(pred.get("away_win") or 0.0)
     top_side = max(hw, aw)
 
-    if top_side < 55.0:
+    # Graduated probability penalty — single block, no duplicate
+    if top_side < 52.0:
         risk += 0.35
         reasons.append("COIN_FLIP")
-    elif top_side < 62.0:
-        risk += 0.20
-        reasons.append("LOW_SEPARATION")
-
-    # Pitcher/ERA data strongly affects MLB accuracy
-    if not pred.get("pitcher_home") or not pred.get("pitcher_away"):
+    elif top_side < 58.0:
         risk += 0.25
+        reasons.append("COIN_FLIP")
+    elif top_side < 62.0:
+        risk += 0.10
+        reasons.append("LOW_PROB")
+
+    # Pitcher/ERA data strongly affects MLB accuracy.
+    # pitcher_home/away are now populated by baseball.predict_game() as bools.
+    has_era = pred.get("pitcher_home", False) or pred.get("home_era") is not None
+    has_era_away = pred.get("pitcher_away", False) or pred.get("away_era") is not None
+    if not has_era or not has_era_away:
+        risk += 0.15   # lowered from 0.25; RPG data still provides a baseline
         reasons.append("DATA_MISSING")
 
     if not pred.get("live_data", True):
-        risk += 0.15
+        risk += 0.10   # lowered from 0.15
         reasons.append("DATA_MISSING")
 
     return min(risk, 1.0), reasons
@@ -355,8 +377,8 @@ _CAL_N_SKIP        = 30    # n < this → no calibration
 _CAL_N_CONSERVATIVE = 100  # n < this → conservative EWMA (0.5 weight)
 
 # Clamp bounds for safe-mode calibrated probabilities
-_CAL_SAFE_MIN = 50.0
-_CAL_SAFE_MAX = 90.0
+_CAL_SAFE_MIN = 45.0   # lowered from 50.0
+_CAL_SAFE_MAX = 92.0   # raised from 90.0
 
 
 def calibrate_prob_gated(
@@ -402,6 +424,19 @@ def calibrate_prob_gated(
         bucket = "full"
         factor = _get_factor(stats) or 1.0
         adjusted = prob * factor
+
+    # Calibration floor: prevent a downward-calibration "death spiral".
+    # If calibration would reduce the probability by more than _CAL_FLOOR_MAX_REDUCTION pp,
+    # cap the reduction so picks still get a fair chance at the filter.
+    # 15 pp was chosen to:
+    #   (a) preserve the meaningful difference between conservative (half-
+    #       strength) and full calibration buckets (a full-strength factor
+    #       of 0.70 reduces 80 % → 56 %, floored to 65 % = -15 pp; while
+    #       conservative blends to 0.85, giving 68 % which is above the floor),
+    #   (b) still prevent extreme overconfident factors from pushing good picks
+    #       all the way below min_prob in a single bad stretch of results.
+    if adjusted < prob - _CAL_FLOOR_MAX_REDUCTION:
+        adjusted = prob - _CAL_FLOOR_MAX_REDUCTION
 
     adjusted = round(adjusted, 1)
     if safe_mode:
@@ -541,8 +576,8 @@ def _passes_clarity(candidate: dict, pred: dict, safe_mode: bool) -> tuple:
 def generate_parlay_legs(
     predictions: list,
     max_legs: int = 5,
-    min_confidence: str = "ALTA",
-    min_prob: float = 75.0,
+    min_confidence: str = "MEDIA",
+    min_prob: float = 65.0,
     safe_mode: bool = False,
     cal_stats: Optional[dict] = None,
 ) -> tuple:
@@ -584,9 +619,9 @@ def generate_parlay_legs(
     risk_threshold = RISK_THRESHOLD_SAFE if safe_mode else RISK_THRESHOLD_DEFAULT
     allowed_markets = _SAFE_MODE_MARKETS if safe_mode else _DEFAULT_MODE_MARKETS
 
-    # Effective safe-mode min_prob (override if caller passed the default)
+    # Effective safe-mode min_prob (override if caller passed the old default)
     eff_min_prob = min_prob
-    if safe_mode and eff_min_prob >= 75.0:
+    if safe_mode and eff_min_prob >= 62.0:
         eff_min_prob = MIN_PROB_SAFE_ABS
 
     # Exclusion reason counters and excluded list
