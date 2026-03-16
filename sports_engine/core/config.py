@@ -36,6 +36,14 @@ ALERTS_CHANNEL_ID: str = os.getenv("ALERTS_CHANNEL_ID", "")
 ODDS_API_KEY: str = os.getenv("ODDS_API_KEY", "")
 ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
 
+# ── Sportradar (https://developer.sportradar.com) ─────────────────────────────
+# Provides richer stats than ESPN: NBA OffRtg/DefRtg/pace, MLB starting pitcher
+# ERA/WHIP, NFL scoring efficiency, etc.  When set, sport predictors prefer
+# Sportradar data over ESPN season averages.
+# SPORTRADAR_ACCESS: "trial" (default) for trial accounts; "" for production.
+SPORTRADAR_API_KEY: str = os.getenv("SPORTRADAR_API_KEY", "")
+SPORTRADAR_ACCESS: str = os.getenv("SPORTRADAR_ACCESS", "trial")
+
 # ── Auto-scanner tuning ────────────────────────────────────────────────────────
 # Interval (seconds) between full auto-scan cycles. Default 300 s (5 min).
 # With the free Odds-API tier (500 req/month) a longer interval is recommended.

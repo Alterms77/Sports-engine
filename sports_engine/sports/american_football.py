@@ -147,6 +147,23 @@ def _fetch_espn_stats(team_name: str) -> dict:
         return {}
 
 
+def _fetch_stats(team_name: str) -> dict:
+    """
+    Fetch NFL team stats, preferring Sportradar when configured.
+
+    Falls back to ESPN if Sportradar is unavailable or returns no data.
+    """
+    try:
+        from api.sportradar import get_nfl_team_stats, is_available
+        if is_available():
+            sr = get_nfl_team_stats(team_name)
+            if sr:
+                return sr
+    except Exception as exc:
+        logger.debug("Sportradar NFL unavailable for '%s': %s", team_name, exc)
+    return _fetch_espn_stats(team_name)
+
+
 def _extract_ppg(stats: dict, fallback: float) -> float:
     for key in ("ppg", "pointsPerGame", "avgPoints", "points", "totalPointsPerGame"):
         if key in stats:
@@ -185,8 +202,8 @@ def predict_game(home_name: str, away_name: str) -> dict:
     Fetches live season stats from ESPN when available; falls back to
     league averages (neutral game prediction) otherwise.
     """
-    home_stats = _fetch_espn_stats(home_name)
-    away_stats = _fetch_espn_stats(away_name)
+    home_stats = _fetch_stats(home_name)
+    away_stats = _fetch_stats(away_name)
     live = bool(home_stats or away_stats)
 
     home_ppg = _extract_ppg(home_stats, NFL_AVG_PPG)

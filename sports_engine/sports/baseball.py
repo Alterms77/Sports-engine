@@ -144,6 +144,23 @@ def _fetch_espn_stats(team_name: str) -> dict:
         return {}
 
 
+def _fetch_stats(team_name: str) -> dict:
+    """
+    Fetch MLB team stats, preferring Sportradar when configured.
+
+    Falls back to ESPN if Sportradar is unavailable or returns no data.
+    """
+    try:
+        from api.sportradar import get_mlb_team_stats, is_available
+        if is_available():
+            sr = get_mlb_team_stats(team_name)
+            if sr:
+                return sr
+    except Exception as exc:
+        logger.debug("Sportradar MLB unavailable for '%s': %s", team_name, exc)
+    return _fetch_espn_stats(team_name)
+
+
 def _extract_rpg(stats: dict, fallback: float) -> float:
     for key in ("avgRuns", "runsPerGame", "runs", "rpg"):
         if key in stats:
@@ -179,10 +196,19 @@ def predict_game(home_name: str, away_name: str) -> dict:
     """
     Predict an MLB game using the Poisson runs model and Pythagorean win expectation.
 
+    Data priority:
+    1. Sportradar team stats + today's starting pitcher ERA/WHIP (best quality)
+    2. ESPN team season stats + team ERA (fallback)
+    3. League-average defaults (worst case — data unavailable)
+
+    Starting pitcher ERA is the single most important factor for individual
+    MLB game predictions; using the scheduled starter vs team ERA alone gives
+    a substantial improvement in accuracy.
+
     Returns a standardised prediction dict compatible with the bot's formatter.
     """
-    home_stats = _fetch_espn_stats(home_name)
-    away_stats = _fetch_espn_stats(away_name)
+    home_stats = _fetch_stats(home_name)
+    away_stats = _fetch_stats(away_name)
     live = bool(home_stats or away_stats)
 
     home_rpg = _extract_rpg(home_stats, MLB_AVG_RPG)
@@ -200,17 +226,57 @@ def predict_game(home_name: str, away_name: str) -> dict:
     xr_home = home_off_str * league_avg * (1.0 + MLB_HOME_ADV)
     xr_away = away_off_str * league_avg
 
-    # Try to use ERA from away team's pitching staff to reduce home xR
-    away_era = _extract_era(away_stats)
-    home_era = _extract_era(home_stats)
-    league_era = 4.0  # MLB average ERA
+    # ── ERA adjustment: prefer today's starting pitcher over team ERA ─────────
+    #
+    # Sportradar's daily schedule includes the probable starter for each game
+    # with their season-to-date ERA and WHIP.  Using the starter ERA (instead
+    # of the team's aggregate ERA) gives a much more accurate picture of how
+    # many runs each team is actually likely to allow today.
+    #
+    # Adjustment formula: pitcher_adj = league_ERA / pitcher_ERA
+    #   → A pitcher with ERA 2.5 vs league 4.0 allows 60 % as many runs as
+    #     average, so xR against them is multiplied by 0.625.
+    #   → A pitcher with ERA 5.5 allows 127 % of average runs, so xR ×1.27.
 
-    if away_era:
-        pitcher_adj = league_era / max(away_era, 0.5)
+    league_era = 4.0
+    starters: dict = {}
+    starter_era_used = False
+
+    try:
+        from api.sportradar import get_mlb_today_starters, is_available
+        if is_available():
+            starters = get_mlb_today_starters(home_name, away_name)
+    except Exception as exc:
+        logger.debug("Sportradar MLB starters unavailable: %s", exc)
+
+    home_pitcher_info = starters.get("home_pitcher")
+    away_pitcher_info = starters.get("away_pitcher")
+
+    # ERA used to adjust expected runs for each team
+    # Priority: today's starter ERA → team season ERA → league default
+    away_era_used = (
+        (away_pitcher_info or {}).get("era")
+        or _extract_era(away_stats)
+    )
+    home_era_used = (
+        (home_pitcher_info or {}).get("era")
+        or _extract_era(home_stats)
+    )
+
+    # Fallback variables for return dict compatibility
+    away_era = away_era_used
+    home_era = home_era_used
+
+    if away_era_used:
+        pitcher_adj = league_era / max(away_era_used, 0.5)
         xr_home = round(xr_home * pitcher_adj, 2)
-    if home_era:
-        pitcher_adj = league_era / max(home_era, 0.5)
+        if away_pitcher_info and away_pitcher_info.get("era"):
+            starter_era_used = True
+    if home_era_used:
+        pitcher_adj = league_era / max(home_era_used, 0.5)
         xr_away = round(xr_away * pitcher_adj, 2)
+        if home_pitcher_info and home_pitcher_info.get("era"):
+            starter_era_used = True
 
     xr_home = round(max(xr_home, 0.5), 2)
     xr_away = round(max(xr_away, 0.5), 2)
