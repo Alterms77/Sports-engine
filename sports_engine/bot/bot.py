@@ -1519,7 +1519,11 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parlay_id=parlay_id,
         report=report,
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    try:
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as exc:
+        logger.warning("parlay_command: Markdown parse failed (%s), retrying plain", exc)
+        await update.message.reply_text(text)
 
 
 async def parlay_safe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1594,7 +1598,81 @@ async def parlay_safe_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.warning("parlay_safe_command: could not save to history: %s", exc)
 
     text = format_parlay_safe(legs, report, parlay_id=parlay_id)
-    await update.message.reply_text(text, parse_mode="Markdown")
+    try:
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as exc:
+        logger.warning("parlay_safe_command: Markdown parse failed (%s), retrying plain", exc)
+        await update.message.reply_text(text)
+
+
+async def parlay_dream_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /parlay_dream  (alias: /parlay_sonador)
+
+    Generate a high-risk, high-reward "dream parlay" that covers multiple
+    correlated picks per match across all available sports.  Each bundle tells
+    a coherent story — lower probability but more exciting.
+    """
+    await update.message.reply_text(
+        "🌙 Generando Parlay Soñador…",
+        parse_mode="Markdown",
+    )
+
+    # ── Refresh soccer CSV if stale ────────────────────────────────────────
+    _refresh_matches_if_stale()
+
+    # ── Load today's matches; ESPN may already include tomorrow's games ──────
+    matches = load_today_matches_multisport()
+    if not matches:
+        await update.message.reply_text(
+            "❌ No hay partidos disponibles para hoy.\nUsa `/today` para verificar o intenta más tarde.",
+            parse_mode="Markdown",
+        )
+        return
+
+    # ── Run predictions concurrently with per-match 15 s timeout ─────────
+    semaphore = _asyncio.Semaphore(5)
+    preds = await _asyncio.gather(
+        *[_predict_one(m, semaphore) for m in matches],
+        return_exceptions=False,
+    )
+    predictions = [p for p in preds if p is not None]
+
+    if not predictions:
+        await update.message.reply_text(
+            "❌ No se pudieron generar predicciones para los partidos de hoy."
+        )
+        return
+
+    from core.parlay import generate_dream_parlay, format_parlay_dream
+    from core.parlay_history import save_parlay as _save_parlay
+
+    bundles = generate_dream_parlay(predictions, max_bundles=4)
+
+    # ── Save to history ────────────────────────────────────────────────────
+    parlay_id = ""
+    if bundles:
+        try:
+            all_legs = [leg for b in bundles for leg in b["legs"]]
+            # Annotate legs with match info for history storage
+            for bundle in bundles:
+                for leg in bundle["legs"]:
+                    leg.setdefault("match", bundle["match"])
+                    leg.setdefault("sport", bundle["sport"])
+                    leg.setdefault("sport_emoji", bundle["sport_emoji"])
+            combined = 1.0
+            for b in bundles:
+                combined *= b["bundle_prob"] / 100.0
+            parlay_id = _save_parlay(all_legs, "dream", round(combined * 100, 1))
+        except Exception as exc:
+            logger.warning("parlay_dream_command: could not save to history: %s", exc)
+
+    text = format_parlay_dream(bundles, parlay_id=parlay_id)
+    try:
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as exc:
+        logger.warning("parlay_dream_command: Markdown parse failed (%s), retrying plain", exc)
+        await update.message.reply_text(text)
 
 
 # ── Parlay photo / text analyzer ─────────────────────────────────────────────
@@ -3067,6 +3145,7 @@ _MENU_SECTIONS = [
     ("── 🎰 PARLAYS ──", None),
     ("🎰 Parlay",        "cmd_parlay"),
     ("🛡 Parlay Safe",   "cmd_parlay_safe"),
+    ("🌙 Parlay Soñador", "cmd_parlay_dream"),
     ("📸 Check Parlay",  "cmd_checkparlay"),
 
     ("── 📊 ESTADÍSTICAS ──", None),
@@ -3093,6 +3172,7 @@ _MENU_DISPATCH: dict[str, str] = {
     "cmd_tennis":       "tennis",
     "cmd_parlay":       "parlay_command",
     "cmd_parlay_safe":  "parlay_safe_command",
+    "cmd_parlay_dream": "parlay_dream_command",
     "cmd_checkparlay":  "checkparlay_command",
     "cmd_estadisticas": "estadisticas_command",
     "cmd_historial":    "historial_command",
@@ -3252,6 +3332,8 @@ def main():
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("parlay",       parlay_command))
     app.add_handler(CommandHandler("parlay_safe",  parlay_safe_command))
+    app.add_handler(CommandHandler("parlay_dream",   parlay_dream_command))
+    app.add_handler(CommandHandler("parlay_sonador", parlay_dream_command))
 
     # ── Parlay photo analyzer, text checker, result recorder, history ──
     app.add_handler(CommandHandler("checkparlay",   checkparlay_command))
