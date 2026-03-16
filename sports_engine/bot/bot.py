@@ -600,7 +600,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  `/today futbol` · `/today nba` · `/today nfl` · `/today mlb` · `/today tenis`\n"
         "📅 `/mañana` — partidos de mañana\n"
         "🔥 `/top` — mejores picks del día (fútbol, por confianza)\n"
+        "🤖 `/pronosticos` — picks ALTA confianza del día (en tu chat)\n"
         "🔄 `/h2h LOCAL vs VISITANTE` — historial cara a cara\n"
+        "📈 `/tendencia EQUIPO` — tendencia de goles del equipo\n"
+        "🔔 `/alertas activar` — recibir picks diarios aquí a las 08:00 UTC\n"
         "❓ `/help` — ayuda detallada\n"
         "🎛 `/menu` — menú con botones",
         parse_mode="Markdown",
@@ -1207,6 +1210,258 @@ async def h2h_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error al obtener H2H: {exc}")
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 📣 PRONOSTICOS — On-demand ALTA picks for today
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def pronosticos_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show today's ALTA-confidence soccer picks on demand.
+
+    Same as the scheduled 8 AM broadcast but available any time a user asks.
+
+    Usage:
+        /pronosticos
+    """
+    await update.message.reply_text(
+        "🤖 Buscando picks de alta confianza para hoy…",
+        parse_mode="Markdown",
+    )
+
+    _refresh_matches_if_stale()
+    matches = load_today_matches()
+
+    if not matches:
+        await update.message.reply_text(
+            "📭 No hay partidos cargados para hoy.\n"
+            "Usa `/today futbol` para verificar la agenda.",
+            parse_mode="Markdown",
+        )
+        return
+
+    alta_picks: list[str] = []
+    for match in matches:
+        try:
+            pred = get_full_prediction(match["home"], match["away"], fetch_live=True)
+        except Exception:
+            continue
+        if pred.get("confidence") != "ALTA":
+            continue
+        probs = {
+            f"Victoria {pred['home']}": pred.get("home_win", 0),
+            "Empate":                   pred.get("draw", 0),
+            f"Victoria {pred['away']}": pred.get("away_win", 0),
+        }
+        best_label = max(probs, key=probs.get)
+        best_pct   = probs[best_label]
+        league     = pred.get("league", "")
+        league_str = f" _({league})_" if league else ""
+        xg_line    = ""
+        if pred.get("xg_home") and pred.get("xg_away"):
+            xg_line = f"\n   xG: `{pred['xg_home']:.2f} – {pred['xg_away']:.2f}`"
+        alta_picks.append(
+            f"🔥 *{pred['home']} vs {pred['away']}*{league_str}\n"
+            f"   ✅ Pick: {best_label} `({best_pct:.1f}%)`{xg_line}"
+        )
+
+    if not alta_picks:
+        await update.message.reply_text(
+            "ℹ️ No hay picks de confianza ALTA en la agenda de hoy.\n\n"
+            "Prueba `/top` para ver los mejores picks disponibles.",
+            parse_mode="Markdown",
+        )
+        return
+
+    today_str = datetime.utcnow().strftime("%d/%m/%Y")
+    header = f"🤖 *PICKS DE ALTA CONFIANZA — {today_str}*\n\n"
+    text   = header + "\n\n".join(alta_picks)
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 🔔 ALERTAS — Per-user subscription for daily ALTA picks
+# ══════════════════════════════════════════════════════════════════════════════
+
+_SUBSCRIBERS_PATH = os.path.join(_SPORTS_ENGINE_DIR, "data", "alert_subscribers.json")
+_subscribers_lock = threading.Lock()
+
+
+def _load_subscribers() -> list[int]:
+    """Return list of subscribed chat_ids from the JSON store."""
+    try:
+        with open(_SUBSCRIBERS_PATH, encoding="utf-8") as f:
+            import json
+            data = json.load(f)
+            return [int(x) for x in data.get("subscribers", [])]
+    except FileNotFoundError:
+        return []
+    except Exception as exc:
+        logger.warning("_load_subscribers: %s", exc)
+        return []
+
+
+def _save_subscribers(subs: list[int]) -> None:
+    """Persist the subscriber list to JSON."""
+    import json
+    try:
+        with open(_SUBSCRIBERS_PATH, "w", encoding="utf-8") as f:
+            json.dump({"subscribers": subs}, f)
+    except Exception as exc:
+        logger.warning("_save_subscribers: %s", exc)
+
+
+async def alertas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Subscribe or unsubscribe from the daily ALTA-confidence picks broadcast.
+
+    Usage:
+        /alertas activar    — subscribe this chat to the daily digest (08:00 UTC)
+        /alertas desactivar — unsubscribe
+        /alertas            — show current subscription status
+    """
+    chat_id = update.effective_chat.id
+    action  = context.args[0].lower() if context.args else "status"
+
+    with _subscribers_lock:
+        subs = _load_subscribers()
+
+        if action == "activar":
+            if chat_id not in subs:
+                subs.append(chat_id)
+                _save_subscribers(subs)
+            await update.message.reply_text(
+                "✅ *Alertas activadas.*\n\n"
+                "Recibirás los picks de confianza ALTA cada día a las *08:00 UTC* directamente aquí.\n\n"
+                "Usa `/alertas desactivar` para cancelar en cualquier momento.",
+                parse_mode="Markdown",
+            )
+
+        elif action in ("desactivar", "cancelar"):
+            if chat_id in subs:
+                subs.remove(chat_id)
+                _save_subscribers(subs)
+            await update.message.reply_text(
+                "🔕 *Alertas desactivadas.*\n\n"
+                "Ya no recibirás el resumen diario aquí.\n"
+                "Usa `/alertas activar` para reactivarlas.",
+                parse_mode="Markdown",
+            )
+
+        else:
+            subscribed = chat_id in subs
+            status_str = "🟢 *Activadas*" if subscribed else "🔴 *Desactivadas*"
+            await update.message.reply_text(
+                f"🔔 *Estado de alertas:* {status_str}\n\n"
+                "  `/alertas activar`    — recibir picks ALTA cada día a las 08:00 UTC\n"
+                "  `/alertas desactivar` — cancelar suscripción\n\n"
+                "_Los picks también están disponibles en cualquier momento con_ `/pronosticos`",
+                parse_mode="Markdown",
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 📈 TENDENCIA — Team goal-scoring trend sparkline
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _spark(values: list[float], width: int = 8) -> str:
+    """Return an ASCII sparkline bar for a list of values (0–max)."""
+    _BLOCKS = " ▁▂▃▄▅▆▇█"
+    if not values:
+        return ""
+    max_v = max(values) or 1
+    return "".join(_BLOCKS[min(int(v / max_v * (len(_BLOCKS) - 1)), len(_BLOCKS) - 1)] for v in values)
+
+
+async def tendencia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show a team's goal-scoring trend over the last N matches.
+
+    Usage:
+        /tendencia EQUIPO        — last 10 matches
+        /tendencia EQUIPO 15     — last N matches (5–20)
+    """
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Formato:\n`/tendencia EQUIPO [N]`\n\n"
+            "Ejemplo:\n`/tendencia Barcelona`\n`/tendencia Man City 15`",
+            parse_mode="Markdown",
+        )
+        return
+
+    # Parse optional trailing N
+    args = list(context.args)
+    n_games = 10
+    if args and args[-1].isdigit():
+        n_games = max(5, min(20, int(args.pop())))
+    team_raw = " ".join(args).strip()
+
+    from sports.football import MATCH_HISTORY, resolve_team
+    team_r = resolve_team(team_raw) or team_raw
+    history = MATCH_HISTORY.get(team_r, [])
+
+    if not history:
+        # Try partial name match
+        candidates = [t for t in MATCH_HISTORY if team_raw.lower() in t.lower()]
+        if candidates:
+            team_r = candidates[0]
+            history = MATCH_HISTORY[team_r]
+        if not history:
+            from sports.football import suggest_teams
+            tips = suggest_teams(team_raw)
+            tip_str = ""
+            if tips:
+                tip_str = "\n\n¿Quisiste decir?\n" + "\n".join(f"  • {s}" for s in tips)
+            await update.message.reply_text(
+                f"❌ No se encontraron datos para *{team_raw}*.{tip_str}",
+                parse_mode="Markdown",
+            )
+            return
+
+    recent = history[-n_games:]
+    n_actual = len(recent)
+
+    scored_list    = [m["scored"]    for m in recent]
+    conceded_list  = [m["conceded"]  for m in recent]
+    results_str    = [m["result"]    for m in recent]
+    home_flags     = [m["is_home"]   for m in recent]
+
+    avg_scored   = sum(scored_list)   / n_actual
+    avg_conceded = sum(conceded_list) / n_actual
+    wins  = results_str.count("W")
+    draws = results_str.count("D")
+    losses = results_str.count("L")
+    cs    = sum(1 for g in conceded_list if g == 0)
+    over25 = sum(1 for s, c in zip(scored_list, conceded_list) if s + c > 2)
+    btts  = sum(1 for s, c in zip(scored_list, conceded_list) if s > 0 and c > 0)
+
+    # Per-match result emojis  W=🟢 D=🟡 L=🔴
+    _R = {"W": "🟢", "D": "🟡", "L": "🔴"}
+    result_line  = " ".join(_R.get(r, "⚪") for r in results_str)
+    home_line    = " ".join("🏠" if h else "✈️" for h in home_flags)
+    scored_spark = _spark(scored_list)
+    conceded_spark = _spark(conceded_list)
+
+    # Recent results as W-D-L per match short string
+    results_short = "".join(results_str)
+
+    lines = [
+        f"📈 *Tendencia — {team_r}* _(últimos {n_actual} partidos)_",
+        "",
+        f"📊 Resultados:  {result_line}",
+        f"              `{results_short}`",
+        f"🏟️ Local/Visit: {home_line}",
+        "",
+        f"⚽ Goles anotados:    `{' '.join(str(s) for s in scored_list)}`",
+        f"   Tendencia: `{scored_spark}`  Prom: *{avg_scored:.2f}*/partido",
+        f"🚫 Goles recibidos:   `{' '.join(str(c) for c in conceded_list)}`",
+        f"   Tendencia: `{conceded_spark}`  Prom: *{avg_conceded:.2f}*/partido",
+        "",
+        f"🏆 Registro: *{wins}G {draws}E {losses}P*  ({wins/n_actual*100:.0f}% victorias)",
+        f"🔒 Portería a 0:  *{cs}/{n_actual}* ({cs/n_actual*100:.0f}%)",
+        f"📈 Más de 2.5 goles: *{over25}/{n_actual}* ({over25/n_actual*100:.0f}%)",
+        f"🔵 BTTS: *{btts}/{n_actual}* ({btts/n_actual*100:.0f}%)",
+    ]
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def predict(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
@@ -1583,7 +1838,10 @@ async def sports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  `/today futbol` · `/today nba` · `/today nfl` · `/today mlb` · `/today tenis`\n"
         "📅 `/mañana` — partidos de mañana (acepta mismo filtro de deporte)\n"
         "🔥 `/top [N]` — top N mejores picks de fútbol del día (por confianza/prob)\n"
+        "🤖 `/pronosticos` — picks de alta confianza del día directamente en tu chat\n"
         "🔄 `/h2h LOCAL vs VISITANTE` — historial cara a cara detallado\n"
+        "📈 `/tendencia EQUIPO [N]` — tendencia de goles (últimos N partidos, sparkline)\n"
+        "🔔 `/alertas activar|desactivar` — suscripción diaria a picks ALTA (08:00 UTC)\n"
         "❓ `/help` — ayuda detallada\n\n"
         "_Props basados en promedios de liga escalados al rendimiento del equipo._\n"
         "_Fuentes: SofaScore · TheSportsDB · ESPN_",
@@ -3715,10 +3973,14 @@ async def auto_scan_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def send_daily_alerts(context: ContextTypes.DEFAULT_TYPE):
-    """Scheduled job: send high-confidence picks to alerts channel."""
+    """Scheduled job: send high-confidence picks to alerts channel + per-user subscribers."""
     from core.config import ALERTS_CHANNEL_ID
     channel_id = ALERTS_CHANNEL_ID
-    if not channel_id:
+
+    # Check if there's anyone to send to
+    with _subscribers_lock:
+        subs = _load_subscribers()
+    if not channel_id and not subs:
         return
 
     matches = load_today_matches()
@@ -3747,12 +4009,26 @@ async def send_daily_alerts(context: ContextTypes.DEFAULT_TYPE):
     if alerts:
         header = f"🤖 *PICKS DE ALTA CONFIANZA*\n📅 {datetime.utcnow().strftime('%d/%m/%Y')}\n\n"
         text = header + "\n\n".join(alerts)
-        try:
-            await context.bot.send_message(
-                chat_id=channel_id, text=text, parse_mode="Markdown"
-            )
-        except Exception as exc:
-            logger.warning("Could not send daily alerts: %s", exc)
+
+        # Broadcast to the configured alerts channel
+        if channel_id:
+            try:
+                await context.bot.send_message(
+                    chat_id=channel_id, text=text, parse_mode="Markdown"
+                )
+            except Exception as exc:
+                logger.warning("Could not send daily alerts to channel: %s", exc)
+
+        # Also broadcast to all per-user subscribers
+        with _subscribers_lock:
+            subs = _load_subscribers()
+        for sub_id in subs:
+            try:
+                await context.bot.send_message(
+                    chat_id=sub_id, text=text, parse_mode="Markdown"
+                )
+            except Exception as exc:
+                logger.warning("Could not send daily alert to subscriber %s: %s", sub_id, exc)
 
 
 
@@ -3772,6 +4048,7 @@ _MENU_SECTIONS = [
     ("🎾 Tennis",    "cmd_tennis"),
     ("🔄 H2H",       "cmd_h2h"),
     ("🔥 Top Picks", "cmd_top"),
+    ("📈 Tendencia", "cmd_tendencia"),
 
     ("── 🎰 PARLAYS ──", None),
     ("🎰 Parlay",        "cmd_parlay"),
@@ -3787,6 +4064,7 @@ _MENU_SECTIONS = [
     ("🎾 Tenis Hoy",   "cmd_today_tenis"),
     ("📅 Todo Hoy",    "cmd_today"),
     ("📅 Mañana",      "cmd_manana"),
+    ("🤖 Pronósticos", "cmd_pronosticos"),
 
     ("── 📊 ESTADÍSTICAS ──", None),
     ("📊 Estadísticas",  "cmd_estadisticas"),
@@ -3800,6 +4078,10 @@ _MENU_SECTIONS = [
     ("📡 Live",     "cmd_live"),
     ("📺 Scores",   "cmd_scores"),
     ("🏆 Tabla",    "cmd_tabla"),
+
+    ("── 🔔 ALERTAS ──", None),
+    ("🔔 Activar alertas",    "cmd_alertas_on"),
+    ("🔕 Desactivar alertas", "cmd_alertas_off"),
 ]
 
 # Map callback_data → the async handler function name
@@ -3811,6 +4093,7 @@ _MENU_DISPATCH: dict[str, str] = {
     "cmd_tennis":       "tennis",
     "cmd_h2h":          "h2h_command",
     "cmd_top":          "top_picks",
+    "cmd_tendencia":    "tendencia_command",
     "cmd_parlay":       "parlay_command",
     "cmd_parlay_safe":  "parlay_safe_command",
     "cmd_parlay_dream": "parlay_dream_command",
@@ -3824,11 +4107,14 @@ _MENU_DISPATCH: dict[str, str] = {
     "cmd_today_mlb":    "today_mlb",
     "cmd_today_tenis":  "today_tenis",
     "cmd_manana":       "manana",
+    "cmd_pronosticos":  "pronosticos_command",
     "cmd_autoscan":     "autoscan_command",
     "cmd_scanner":      "scanner_command",
     "cmd_live":         "live",
     "cmd_scores":       "scores",
     "cmd_tabla":        "tabla",
+    "cmd_alertas_on":   "alertas_command",
+    "cmd_alertas_off":  "alertas_command",
 }
 
 
@@ -3904,6 +4190,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "cmd_nfl":         "🏈 Uso: `/nfl LOCAL vs VISITANTE`",
         "cmd_tennis":      "🎾 Uso: `/tennis J1 vs J2 [clay/grass/hard]`",
         "cmd_h2h":         "🔄 Uso: `/h2h LOCAL vs VISITANTE`\nEj: `/h2h Barcelona vs Real Madrid`",
+        "cmd_tendencia":   "📈 Uso: `/tendencia EQUIPO [N]`\nEj: `/tendencia Barcelona` o `/tendencia Man City 15`",
         "cmd_checkparlay": "📸 Uso: `/checkparlay <patas del parlay>`\n"
                            "O envía una *foto* con caption describiendo las patas.",
         "cmd_tabla":       "🏆 Uso: `/tabla <liga>`\nEj: `/tabla Premier League`",
@@ -3914,6 +4201,10 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _NEEDS_ARGS[cb], parse_mode="Markdown"
         )
         return
+
+    # For alertas buttons, inject args before dispatching
+    if cb in ("cmd_alertas_on", "cmd_alertas_off"):
+        context.args = ["activar"] if cb == "cmd_alertas_on" else ["desactivar"]
 
     fn_name = _MENU_DISPATCH.get(cb)
     if not fn_name:
@@ -3938,6 +4229,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         def __init__(self, msg, q):
             self.message        = msg
             self.effective_user = q.from_user
+            self.effective_chat = msg.chat
             self._query         = q
 
         def __getattr__(self, item):
@@ -3985,6 +4277,9 @@ def main():
     app.add_handler(CommandHandler("top",          top_picks))
     app.add_handler(CommandHandler("mejores",      top_picks))
     app.add_handler(CommandHandler("h2h",          h2h_command))
+    app.add_handler(CommandHandler("pronosticos",  pronosticos_command))
+    app.add_handler(CommandHandler("alertas",      alertas_command))
+    app.add_handler(CommandHandler("tendencia",    tendencia_command))
     app.add_handler(CommandHandler("predict", predict))
     app.add_handler(CommandHandler("value", value))
     app.add_handler(CommandHandler("stats", stats))
@@ -4042,13 +4337,16 @@ def main():
     app.add_handler(CommandHandler("tabla", tabla))
 
     # ── Daily alerts scheduler (8 AM) ──
+    # Always schedule — even without ALERTS_CHANNEL_ID, per-user subscribers need it.
     from core.config import ALERTS_CHANNEL_ID
     if app.job_queue:
+        from datetime import time as dt_time
+        alert_time = dt_time(hour=8, minute=0)
+        app.job_queue.run_daily(send_daily_alerts, time=alert_time)
         if ALERTS_CHANNEL_ID:
-            from datetime import time as dt_time
-            alert_time = dt_time(hour=8, minute=0)
-            app.job_queue.run_daily(send_daily_alerts, time=alert_time)
             logger.info("Daily alerts scheduled at 08:00 UTC → channel %s", ALERTS_CHANNEL_ID)
+        else:
+            logger.info("Daily alerts scheduled at 08:00 UTC (no channel; subscriber-only)")
 
         # ── Market Error Scanner (manually-tracked markets, every 15 min) ──
         app.job_queue.run_repeating(scanner_job, interval=900, first=120)
