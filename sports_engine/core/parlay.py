@@ -48,11 +48,33 @@ _CONFIDENCE_RANK = {"ALTA": 2, "MEDIA": 1, "BAJA": 0}
 _MAX_SAME_MARKET = 2
 
 # ── Risk thresholds (0-1 scale) ────────────────────────────────────────────────
-RISK_THRESHOLD_DEFAULT = 0.45   # default /parlay (raised from 0.35 to allow more picks)
+RISK_THRESHOLD_DEFAULT = 0.40   # tightened from 0.45 to improve hit rate
 RISK_THRESHOLD_SAFE    = 0.25   # /parlay_safe (more conservative)
 
 # Keep legacy name for test compatibility
 _HIGH_RISK_SCORE = RISK_THRESHOLD_DEFAULT
+
+# ── Default parlay quality thresholds ────────────────────────────────────────
+# These are used by generate_parlay_legs() default arguments and by bot.py.
+# Raising these from their previous values (min_prob=65, MEDIA confidence)
+# improves hit rate by excluding borderline picks.
+MIN_PROB_DEFAULT    = 68.0    # minimum calibrated probability for default /parlay
+MIN_CONF_DEFAULT    = "ALTA"  # minimum confidence for default /parlay
+
+# ── Form-streak risk penalty ──────────────────────────────────────────────────
+# When the model picks a team to win but that team is on a notable losing streak,
+# the pick is higher-risk than the raw probability suggests.  These constants
+# control the penalty added to the risk score.
+_FORM_STREAK_LOSS_SHORT  = 3   # streak length triggering a mild penalty
+_FORM_STREAK_LOSS_LONG   = 5   # streak length triggering a stronger penalty
+_FORM_STREAK_PENALTY_MID = 0.10   # penalty for ≥3-game losing streak
+_FORM_STREAK_PENALTY_HIGH = 0.18  # penalty for ≥5-game losing streak
+
+# ── Overconfidence calibration risk boost ─────────────────────────────────────
+# If a market type has historically been overconfident (calibration factor < this
+# threshold), add a small risk penalty so the leg is held to a higher standard.
+_CAL_OVERCONF_THRESHOLD = 0.85  # calibration factor below which we add risk
+_CAL_OVERCONF_PENALTY   = 0.05  # extra risk for consistently overconfident markets
 
 # ── Calibration floor ─────────────────────────────────────────────────────────
 # Maximum downward adjustment allowed per calibration step (percentage points).
@@ -107,6 +129,77 @@ def _sport_key(pred: dict) -> str:
     return "soccer"
 
 
+def _get_streak(pred: dict, side: str) -> dict:
+    """
+    Extract streak info for *side* ('home' or 'away') from a prediction dict.
+
+    Soccer predictions include ``form_home`` / ``form_away`` dicts with a
+    nested ``streak`` sub-dict (``{"type": "W"/"L"/"D", "length": int}``)
+    populated by ``core.form.current_streak()``.
+
+    For non-soccer sports the field is absent and we return an empty dict.
+    """
+    key = f"form_{side}"
+    form = pred.get(key, {})
+    if isinstance(form, dict):
+        return form.get("streak", {}) or {}
+    return {}
+
+
+def _form_fade_penalty(pred: dict) -> tuple[float, list]:
+    """
+    Return an extra risk penalty when the model's moneyline pick contradicts
+    the team's recent form (a "form fade" situation).
+
+    Logic:
+    - Determine which side the model favours (higher home_win vs away_win).
+    - Read that side's current streak from ``form_home`` / ``form_away``.
+    - If the favoured side is on a losing streak ≥ ``_FORM_STREAK_LOSS_SHORT``
+      games, add a graduated penalty.
+    - Also flag an opposing hot streak (≥3 W) as a secondary risk indicator.
+
+    Returns (penalty: float, reasons: list[str])
+    """
+    hw = float(pred.get("home_win") or 0.0)
+    aw = float(pred.get("away_win") or 0.0)
+
+    if hw <= 0.0 and aw <= 0.0:
+        return 0.0, []
+
+    if hw >= aw:
+        fav_side, opp_side = "home", "away"
+    else:
+        fav_side, opp_side = "away", "home"
+
+    fav_streak = _get_streak(pred, fav_side)
+    opp_streak = _get_streak(pred, opp_side)
+
+    penalty = 0.0
+    reasons: list = []
+
+    fav_type   = fav_streak.get("type", "")
+    fav_length = int(fav_streak.get("length", 0))
+
+    # Penalise when the model's pick is on a sustained losing run
+    if fav_type == "L":
+        if fav_length >= _FORM_STREAK_LOSS_LONG:
+            penalty += _FORM_STREAK_PENALTY_HIGH
+            reasons.append("FORM_FADE")
+        elif fav_length >= _FORM_STREAK_LOSS_SHORT:
+            penalty += _FORM_STREAK_PENALTY_MID
+            reasons.append("FORM_FADE")
+
+    # Secondary: opponent on a hot winning streak — harder to beat
+    opp_type   = opp_streak.get("type", "")
+    opp_length = int(opp_streak.get("length", 0))
+    if opp_type == "W" and opp_length >= _FORM_STREAK_LOSS_SHORT:
+        penalty += _FORM_STREAK_PENALTY_MID * 0.5   # half-weight secondary signal
+        if "FORM_FADE" not in reasons:
+            reasons.append("FORM_FADE")
+
+    return penalty, reasons
+
+
 # ── Per-sport risk scoring ────────────────────────────────────────────────────
 
 def score_risk_soccer(pred: dict) -> tuple:
@@ -124,6 +217,7 @@ def score_risk_soccer(pred: dict) -> tuple:
       * No live data source: missing data flag
       * No market with strong probability (< 65 %): LOW_PROB
       * Very close draw probability (p_draw ≥ 30 % and < p_best + 10): COIN_FLIP
+      * Favoured team on a recent losing streak: FORM_FADE
 
     Circumstantial "soft" penalties (SHARP, NO_LIVE_DATA, LOW_CONF, LOW_PROB,
     draw COIN_FLIP) are each capped at 0.25 to prevent over-stacking from
@@ -177,6 +271,14 @@ def score_risk_soccer(pred: dict) -> tuple:
         risk += min(0.15, _SOFT_CAP)
         reasons.append("COIN_FLIP")
 
+    # Form-fade: picked team on a losing streak contradicts the model
+    fade_penalty, fade_reasons = _form_fade_penalty(pred)
+    if fade_penalty > 0:
+        risk += min(fade_penalty, _SOFT_CAP)
+        for r in fade_reasons:
+            if r not in reasons:
+                reasons.append(r)
+
     return min(risk, 1.0), reasons
 
 
@@ -209,7 +311,7 @@ def score_risk_nba(pred: dict) -> tuple:
     top_side = max(hw, aw)
 
     # Graduated probability penalty — no duplicate: only one block fires
-    if top_side < 52.0:
+    if top_side < 54.0:
         risk += 0.35
         reasons.append("COIN_FLIP")
     elif top_side < 58.0:
@@ -258,7 +360,7 @@ def score_risk_nfl(pred: dict) -> tuple:
     top_side = max(hw, aw)
 
     # Graduated probability penalty — single block, no duplicate
-    if top_side < 52.0:
+    if top_side < 54.0:
         risk += 0.35
         reasons.append("COIN_FLIP")
     elif top_side < 58.0:
@@ -298,7 +400,7 @@ def score_risk_mlb(pred: dict) -> tuple:
     top_side = max(hw, aw)
 
     # Graduated probability penalty — single block, no duplicate
-    if top_side < 52.0:
+    if top_side < 54.0:
         risk += 0.35
         reasons.append("COIN_FLIP")
     elif top_side < 58.0:
@@ -581,8 +683,8 @@ def _passes_clarity(candidate: dict, pred: dict, safe_mode: bool) -> tuple:
 def generate_parlay_legs(
     predictions: list,
     max_legs: int = 5,
-    min_confidence: str = "MEDIA",
-    min_prob: float = 65.0,
+    min_confidence: str = MIN_CONF_DEFAULT,
+    min_prob: float = MIN_PROB_DEFAULT,
     safe_mode: bool = False,
     cal_stats: Optional[dict] = None,
 ) -> tuple:
@@ -594,7 +696,9 @@ def generate_parlay_legs(
     predictions    : list of prediction dicts (soccer, NBA, NFL, or MLB).
     max_legs       : maximum number of legs to return.
     min_confidence : minimum confidence level ("ALTA" or "MEDIA").
+                     Defaults to ``MIN_CONF_DEFAULT`` ("ALTA").
     min_prob       : minimum individual pick probability (%) after calibration.
+                     Defaults to ``MIN_PROB_DEFAULT`` (68.0).
     safe_mode      : if True, use conservative safe-mode filters (moneyline
                      only, clarity criterion, stricter risk threshold).
     cal_stats      : pre-loaded calibration stats dict.  If None the function
@@ -620,6 +724,14 @@ def generate_parlay_legs(
             cal_stats = get_calibration_stats()
         except Exception:
             cal_stats = {}
+
+    # ── Also load per-sport calibration stats (for overconfidence detection) ─
+    sport_cal_stats: dict = {}
+    try:
+        from core.parlay_history import get_sport_stats
+        sport_cal_stats = get_sport_stats()
+    except Exception:
+        pass
 
     risk_threshold = RISK_THRESHOLD_SAFE if safe_mode else RISK_THRESHOLD_DEFAULT
     allowed_markets = _SAFE_MODE_MARKETS if safe_mode else _DEFAULT_MODE_MARKETS
@@ -663,6 +775,18 @@ def generate_parlay_legs(
             continue
 
         risk_score, risk_reasons = score_risk(pred)
+
+        # ── Overconfidence calibration boost ──────────────────────────────
+        # If historical data shows this sport has been systematically
+        # overconfident (calibration factor < threshold), add a small risk
+        # penalty so overconfident markets face a higher bar.
+        sport_stats = sport_cal_stats.get(sport, {})
+        sport_cal_factor = sport_stats.get("calibration", 1.0) if sport_stats else 1.0
+        if sport_cal_factor < _CAL_OVERCONF_THRESHOLD and sport_stats.get("n", 0) >= 5:
+            risk_score = min(risk_score + _CAL_OVERCONF_PENALTY, 1.0)
+            if "OVERCONF_HISTORY" not in risk_reasons:
+                risk_reasons = list(risk_reasons) + ["OVERCONF_HISTORY"]
+
         if risk_score >= risk_threshold:
             _add_excl(match_str, sport, "", 0, 0, conf,
                       risk_score, risk_reasons or ["HIGH_RISK"])

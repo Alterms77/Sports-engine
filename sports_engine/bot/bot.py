@@ -1466,8 +1466,11 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Build parlays: only ALTA confidence, ≥ 75 % probability ──────────
-    from core.parlay import generate_parlay_legs, build_parlays, format_parlay
+    # ── Build parlays: only ALTA confidence, ≥ 68 % probability ──────────
+    from core.parlay import (
+        generate_parlay_legs, build_parlays, format_parlay,
+        MIN_CONF_DEFAULT, MIN_PROB_DEFAULT, _md_escape,
+    )
     from core.parlay_history import save_parlay as _save_parlay, get_calibration_stats
 
     # Pre-load calibration stats once so generate_parlay_legs doesn't query DB per leg
@@ -1476,20 +1479,42 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         cal_stats = {}
 
-    legs, report, _excluded = generate_parlay_legs(
+    legs, report, excluded = generate_parlay_legs(
         predictions,
-        min_confidence="MEDIA",
-        min_prob=65.0,
+        min_confidence=MIN_CONF_DEFAULT,
+        min_prob=MIN_PROB_DEFAULT,
         cal_stats=cal_stats,
     )
 
     if len(legs) < 2:
         total = report.get("total_candidates", len(predictions))
         excl  = report.get("exclusions", {})
-        excl_str = ", ".join(f"{k}={v}" for k, v in sorted(excl.items())) if excl else "ninguno"
+        excl_str = ", ".join(
+            f"{k}={v}" for k, v in sorted(excl.items(), key=lambda x: -x[1])
+        ) if excl else "ninguno"
+
+        # Show top near-miss picks so the user understands the quality bar
+        near_misses = sorted(
+            [e for e in excluded if e.get("p_best_raw", 0) >= 60],
+            key=lambda x: x.get("p_best_raw", 0),
+            reverse=True,
+        )[:3]
+        near_miss_lines = []
+        for nm in near_misses:
+            reasons_short = ", ".join(nm.get("reasons", [])[:2])
+            near_miss_lines.append(
+                f"  • {_md_escape(nm.get('event_name', 'Partido'))} "
+                f"({nm.get('p_best_raw', 0):.0f}%) — _{reasons_short}_"
+            )
+        near_miss_text = (
+            "\n\n*Picks casi incluidos:*\n" + "\n".join(near_miss_lines)
+            if near_miss_lines else ""
+        )
+
         await update.message.reply_text(
             "⚠️ No hay suficientes picks de alta confianza para armar un parlay hoy.\n"
-            f"_(Analizados: {total} | Excluidos: {excl_str})_",
+            f"_(Analizados: {total} | Excluidos por: {excl_str})_"
+            f"{near_miss_text}",
             parse_mode="Markdown",
         )
         return
