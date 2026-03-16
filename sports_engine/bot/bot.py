@@ -598,6 +598,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  `/live [deporte]` · `/scores` · `/liveteam EQUIPO` · `/tabla LIGA`\n\n"
         "📅 `/today` — partidos de hoy (todos los deportes)\n"
         "  `/today futbol` · `/today nba` · `/today nfl` · `/today mlb` · `/today tenis`\n"
+        "📅 `/mañana` — partidos de mañana\n"
+        "🔥 `/top` — mejores picks del día (fútbol, por confianza)\n"
+        "🔄 `/h2h LOCAL vs VISITANTE` — historial cara a cara\n"
         "❓ `/help` — ayuda detallada\n"
         "🎛 `/menu` — menú con botones",
         parse_mode="Markdown",
@@ -895,6 +898,316 @@ async def today_tenis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await today(update, context)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 📅 MAÑANA — Tomorrow's matches
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def manana(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show tomorrow's matches across all supported sports.
+
+    Usage:
+        /mañana           — all sports
+        /mañana futbol    — ⚽ Fútbol only
+        /mañana nba       — 🏀 NBA only
+        /mañana nfl       — 🏈 NFL only
+        /mañana mlb       — ⚾ MLB only
+        /mañana tenis     — 🎾 Tenis only
+    """
+    arg = (" ".join(context.args)).strip().lower() if context.args else ""
+    _SPORT_MAP = {
+        "futbol": "soccer", "fútbol": "soccer", "football": "soccer", "soccer": "soccer",
+        "nba": "nba",
+        "nfl": "nfl",
+        "mlb": "mlb", "beisbol": "mlb", "béisbol": "mlb", "baseball": "mlb",
+        "tenis": "tennis", "tennis": "tennis",
+    }
+    sport_filter = _SPORT_MAP.get(arg, None)
+
+    matches = load_tomorrow_matches_multisport()
+
+    tomorrow_label = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%d/%m/%Y")
+
+    if not matches:
+        await update.message.reply_text(
+            f"📭 Sin partidos encontrados para mañana ({tomorrow_label}).\n\n"
+            "_Intenta más tarde; los horarios ESPN suelen publicarse el día anterior._",
+            parse_mode="Markdown",
+        )
+        return
+
+    # Filter by sport if requested
+    if sport_filter:
+        matches = [m for m in matches if m.get("sport", "soccer") == sport_filter]
+        if not matches:
+            sport_label = arg.upper()
+            await update.message.reply_text(
+                f"📭 Sin partidos de *{sport_label}* para mañana ({tomorrow_label}).",
+                parse_mode="Markdown",
+            )
+            return
+
+    # Group by sport and send each as its own message
+    by_sport: dict = {}
+    for m in matches:
+        by_sport.setdefault(m.get("sport", "soccer"), []).append(m)
+
+    _sport_meta = {
+        "soccer":  ("⚽", "Fútbol"),
+        "nba":     ("🏀", "NBA"),
+        "nfl":     ("🏈", "NFL"),
+        "mlb":     ("⚾", "MLB"),
+        "tennis":  ("🎾", "Tenis ATP"),
+    }
+
+    if not sport_filter:
+        await update.message.reply_text(
+            f"📅 *Partidos de mañana — {tomorrow_label}*\n"
+            "_Usa `/mañana futbol`, `/mañana nba`, etc. para filtrar._",
+            parse_mode="Markdown",
+        )
+
+    for sport_key, sport_matches in by_sport.items():
+        emoji, label = _sport_meta.get(sport_key, ("🏟️", sport_key.upper()))
+        lines = [f"{emoji} *{label} — {tomorrow_label}*", ""]
+        for m in sport_matches:
+            league = f" _{m['league']}_" if m.get("league") and m["league"] != label else ""
+            lines.append(f"  • {m['home']} vs {m['away']}{league}")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 🔥 TOP — Best picks of the day ranked by confidence/EV
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def top_picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show the top 5 highest-confidence football picks from today's schedule.
+
+    Runs predictions on today's soccer matches (loaded from the CSV),
+    ranks them by model probability, and returns the top picks.
+
+    Usage:
+        /top          — top 5 soccer picks
+        /top 3        — top N picks (1–10)
+    """
+    # Parse optional N argument
+    n_picks = 5
+    if context.args:
+        try:
+            n_picks = max(1, min(10, int(context.args[0])))
+        except (ValueError, TypeError):
+            pass
+
+    await update.message.reply_text(
+        f"🔥 Buscando los {n_picks} mejores picks de hoy…",
+        parse_mode="Markdown",
+    )
+
+    # Force a fresh CSV refresh
+    global _last_csv_update
+    if not _matches_lock.acquire(blocking=False):
+        pass
+    else:
+        try:
+            update_matches()
+            _last_csv_update = _time.time()
+        except Exception as exc:
+            logger.warning("top_picks: refresh error: %s", exc)
+        finally:
+            _matches_lock.release()
+
+    matches = load_today_matches()
+    if not matches:
+        await update.message.reply_text(
+            "📭 No hay partidos de fútbol cargados para hoy.\n"
+            "Usa `/today futbol` para verificar.",
+            parse_mode="Markdown",
+        )
+        return
+
+    semaphore = _asyncio.Semaphore(5)
+    preds_raw = await _asyncio.gather(
+        *[_predict_one(m, semaphore) for m in matches],
+        return_exceptions=True,
+    )
+
+    scored: list[tuple[float, dict]] = []
+    for pred in preds_raw:
+        if pred is None or isinstance(pred, Exception):
+            continue
+        # Score = max(home_win, draw, away_win) probability
+        best_prob = max(
+            pred.get("home_win", 0),
+            pred.get("draw", 0),
+            pred.get("away_win", 0),
+        )
+        scored.append((best_prob, pred))
+
+    if not scored:
+        await update.message.reply_text(
+            "❌ No se pudieron generar predicciones ahora. Intenta en unos minutos.",
+            parse_mode="Markdown",
+        )
+        return
+
+    # Sort descending by best probability, take top N
+    scored.sort(key=lambda x: x[0], reverse=True)
+    top = scored[:n_picks]
+
+    ts_str = datetime.fromtimestamp(_last_csv_update).strftime("%H:%M") if _last_csv_update else ""
+    header = f"🔥 *Top {len(top)} picks de hoy*"
+    if ts_str:
+        header += f" _(datos: {ts_str})_"
+    lines = [header, ""]
+
+    _conf_emoji = {"ALTA": "🟢", "MEDIA": "🟡", "BAJA": "🔴"}
+    for rank, (best_prob, pred) in enumerate(top, 1):
+        conf = pred.get("confidence", "BAJA")
+        c_emoji = _conf_emoji.get(conf, "⚪")
+        home = pred.get("home", "?")
+        away = pred.get("away", "?")
+        league = pred.get("league", "")
+        league_str = f" _({league})_" if league else ""
+        # Find the best outcome label
+        probs = {
+            f"Victoria {home}": pred.get("home_win", 0),
+            "Empate":           pred.get("draw", 0),
+            f"Victoria {away}": pred.get("away_win", 0),
+        }
+        best_label = max(probs, key=probs.get)
+        xg_line = ""
+        if pred.get("xg_home") and pred.get("xg_away"):
+            xg_line = f" | xG {pred['xg_home']:.1f}-{pred['xg_away']:.1f}"
+        lines.append(
+            f"*{rank}.* {c_emoji} {home} vs {away}{league_str}\n"
+            f"   ➤ {best_label} `{best_prob:.1f}%`{xg_line}"
+        )
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 🔄 H2H — Standalone head-to-head analysis
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def h2h_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show deep head-to-head record between two soccer teams.
+
+    Usage:
+        /h2h LOCAL vs VISITANTE
+    """
+    if not context.args or " vs " not in " ".join(context.args).lower():
+        await update.message.reply_text(
+            "❌ Formato:\n`/h2h LOCAL vs VISITANTE`\n\n"
+            "Ejemplo:\n`/h2h Barcelona vs Real Madrid`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+    home_raw, away_raw = raw.split(" vs ", 1)
+    home = home_raw.strip()
+    away = away_raw.strip()
+
+    await update.message.reply_text(
+        f"🔄 Buscando historial *{home}* vs *{away}*…",
+        parse_mode="Markdown",
+    )
+
+    try:
+        from sports.football import MATCH_HISTORY, H2H_DATA, resolve_team
+        home_r = resolve_team(home) or home
+        away_r = resolve_team(away) or away
+
+        records = H2H_DATA.get((home_r, away_r), [])
+        # Also check reverse key (away vs home)
+        if not records:
+            records = H2H_DATA.get((away_r, home_r), [])
+
+        if not records:
+            # Fall back to running a full prediction which fetches live H2H
+            pred = get_full_prediction(home, away, fetch_live=True)
+            h2h = pred.get("h2h", {})
+            if not h2h or h2h.get("total", 0) < 1:
+                await update.message.reply_text(
+                    f"📭 No se encontró historial H2H para *{home}* vs *{away}*.\n\n"
+                    "_Los datos de H2H requieren que ambos equipos estén en la base de datos._",
+                    parse_mode="Markdown",
+                )
+                return
+            n    = h2h.get("total", 0)
+            hw   = h2h.get("home_wins", 0)
+            d    = h2h.get("draws", 0)
+            aw   = h2h.get("away_wins", 0)
+            avg  = h2h.get("avg_goals", 0.0)
+            text = (
+                f"🔄 *H2H: {home} vs {away}*\n\n"
+                f"  Últimos {n} enfrentamientos\n"
+                f"  🏠 {home}: *{hw}* victorias\n"
+                f"  🤝 Empates: *{d}*\n"
+                f"  ✈️ {away}: *{aw}* victorias\n"
+                f"  ⚽ Promedio de goles: *{avg:.2f}* por partido\n"
+            )
+            await update.message.reply_text(text, parse_mode="Markdown")
+            return
+
+        # We have raw records — build a rich breakdown
+        home_wins = sum(
+            1 for r in records
+            if (r.get("home") == home_r and r.get("home_goals", 0) > r.get("away_goals", 0))
+            or (r.get("away") == home_r and r.get("away_goals", 0) > r.get("home_goals", 0))
+        )
+        away_wins = sum(
+            1 for r in records
+            if (r.get("home") == away_r and r.get("home_goals", 0) > r.get("away_goals", 0))
+            or (r.get("away") == away_r and r.get("away_goals", 0) > r.get("home_goals", 0))
+        )
+        draws = len(records) - home_wins - away_wins
+        total_goals = sum(r.get("home_goals", 0) + r.get("away_goals", 0) for r in records)
+        avg_goals = total_goals / len(records) if records else 0.0
+        btts = sum(
+            1 for r in records
+            if r.get("home_goals", 0) > 0 and r.get("away_goals", 0) > 0
+        )
+        over25 = sum(
+            1 for r in records
+            if r.get("home_goals", 0) + r.get("away_goals", 0) > 2
+        )
+        n = len(records)
+
+        lines = [
+            f"🔄 *H2H: {home} vs {away}*",
+            f"_Basado en {n} enfrentamientos_",
+            "",
+            f"🏠 *{home}*: {home_wins} victorias ({home_wins/n*100:.0f}%)",
+            f"🤝 Empates: {draws} ({draws/n*100:.0f}%)",
+            f"✈️ *{away}*: {away_wins} victorias ({away_wins/n*100:.0f}%)",
+            "",
+            f"⚽ Promedio goles/partido: *{avg_goals:.2f}*",
+            f"🔵 BTTS (ambos anotan): *{btts}/{n}* ({btts/n*100:.0f}%)",
+            f"📈 Más de 2.5 goles: *{over25}/{n}* ({over25/n*100:.0f}%)",
+        ]
+
+        # Last 5 results
+        recent = sorted(records, key=lambda r: r.get("date", ""), reverse=True)[:5]
+        if recent:
+            lines += ["", "📋 *Últimos resultados:*"]
+            for r in recent:
+                hg = r.get("home_goals", "?")
+                ag = r.get("away_goals", "?")
+                rh = r.get("home", home_r)
+                ra = r.get("away", away_r)
+                dt = r.get("date", "")
+                date_str = f" _{dt}_" if dt else ""
+                lines.append(f"  • {rh} {hg}-{ag} {ra}{date_str}")
+
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+    except Exception as exc:
+        logger.exception("h2h_command error %s vs %s", home, away)
+        await update.message.reply_text(f"❌ Error al obtener H2H: {exc}")
+
+
+async def predict(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             "❌ Uso incorrecto.\n\nFormato:\n`/predict LOCAL vs VISITANTE`",
@@ -1268,6 +1581,9 @@ async def sports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  `/tabla LIGA` — clasificación\n\n"
         "📅 `/today` — agenda multideporte (todos los deportes)\n"
         "  `/today futbol` · `/today nba` · `/today nfl` · `/today mlb` · `/today tenis`\n"
+        "📅 `/mañana` — partidos de mañana (acepta mismo filtro de deporte)\n"
+        "🔥 `/top [N]` — top N mejores picks de fútbol del día (por confianza/prob)\n"
+        "🔄 `/h2h LOCAL vs VISITANTE` — historial cara a cara detallado\n"
         "❓ `/help` — ayuda detallada\n\n"
         "_Props basados en promedios de liga escalados al rendimiento del equipo._\n"
         "_Fuentes: SofaScore · TheSportsDB · ESPN_",
@@ -3454,6 +3770,8 @@ _MENU_SECTIONS = [
     ("⚾ MLB",       "cmd_mlb"),
     ("🏈 NFL",       "cmd_nfl"),
     ("🎾 Tennis",    "cmd_tennis"),
+    ("🔄 H2H",       "cmd_h2h"),
+    ("🔥 Top Picks", "cmd_top"),
 
     ("── 🎰 PARLAYS ──", None),
     ("🎰 Parlay",        "cmd_parlay"),
@@ -3468,6 +3786,7 @@ _MENU_SECTIONS = [
     ("⚾ MLB Hoy",     "cmd_today_mlb"),
     ("🎾 Tenis Hoy",   "cmd_today_tenis"),
     ("📅 Todo Hoy",    "cmd_today"),
+    ("📅 Mañana",      "cmd_manana"),
 
     ("── 📊 ESTADÍSTICAS ──", None),
     ("📊 Estadísticas",  "cmd_estadisticas"),
@@ -3490,6 +3809,8 @@ _MENU_DISPATCH: dict[str, str] = {
     "cmd_mlb":          "mlb",
     "cmd_nfl":          "nfl",
     "cmd_tennis":       "tennis",
+    "cmd_h2h":          "h2h_command",
+    "cmd_top":          "top_picks",
     "cmd_parlay":       "parlay_command",
     "cmd_parlay_safe":  "parlay_safe_command",
     "cmd_parlay_dream": "parlay_dream_command",
@@ -3502,6 +3823,7 @@ _MENU_DISPATCH: dict[str, str] = {
     "cmd_today_nfl":    "today_nfl",
     "cmd_today_mlb":    "today_mlb",
     "cmd_today_tenis":  "today_tenis",
+    "cmd_manana":       "manana",
     "cmd_autoscan":     "autoscan_command",
     "cmd_scanner":      "scanner_command",
     "cmd_live":         "live",
@@ -3581,6 +3903,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "cmd_mlb":         "⚾ Uso: `/mlb LOCAL vs VISITANTE`",
         "cmd_nfl":         "🏈 Uso: `/nfl LOCAL vs VISITANTE`",
         "cmd_tennis":      "🎾 Uso: `/tennis J1 vs J2 [clay/grass/hard]`",
+        "cmd_h2h":         "🔄 Uso: `/h2h LOCAL vs VISITANTE`\nEj: `/h2h Barcelona vs Real Madrid`",
         "cmd_checkparlay": "📸 Uso: `/checkparlay <patas del parlay>`\n"
                            "O envía una *foto* con caption describiendo las patas.",
         "cmd_tabla":       "🏆 Uso: `/tabla <liga>`\nEj: `/tabla Premier League`",
@@ -3657,6 +3980,11 @@ def main():
     app.add_handler(CommandHandler("today_nfl",    today_nfl))
     app.add_handler(CommandHandler("today_mlb",    today_mlb))
     app.add_handler(CommandHandler("today_tenis",  today_tenis))
+    app.add_handler(CommandHandler("manana",       manana))
+    app.add_handler(CommandHandler("tomorrow",     manana))
+    app.add_handler(CommandHandler("top",          top_picks))
+    app.add_handler(CommandHandler("mejores",      top_picks))
+    app.add_handler(CommandHandler("h2h",          h2h_command))
     app.add_handler(CommandHandler("predict", predict))
     app.add_handler(CommandHandler("value", value))
     app.add_handler(CommandHandler("stats", stats))
