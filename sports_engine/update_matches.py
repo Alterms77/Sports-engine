@@ -30,6 +30,9 @@ def update_matches():
     - Games that have already started or finished are excluded (status filter).
 
     Columns written: home, away, league, date, kickoff_utc, status
+
+    The CSV is only overwritten when at least one valid match is found, so
+    a failed or empty API response never destroys last-known-good data.
     """
 
     if not API_SPORTS_KEY:
@@ -46,6 +49,8 @@ def update_matches():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     params = {"date": today}
 
+    logger.info("update_matches: querying fixtures for date %s", today)
+
     try:
         r = requests.get(url, headers=headers, params=params, timeout=10)
         r.raise_for_status()
@@ -54,12 +59,26 @@ def update_matches():
         logger.warning("API-Sports request failed for date %s: %s", today, exc)
         return
 
+    # Check for API-level errors reported in the response body
+    api_errors = data.get("errors", {})
+    if api_errors:
+        logger.warning("API-Sports returned errors for date %s: %s", today, api_errors)
+        return
+
+    raw_fixtures = data.get("response", [])
+    total_from_api = len(raw_fixtures)
+    logger.info("update_matches: API returned %d fixture(s) in total for %s", total_from_api, today)
+
     matches = []
     now_utc = datetime.now(timezone.utc)
+    skipped_league = 0
+    skipped_status = 0
+    skipped_kickoff = 0
 
-    for m in data.get("response", []):
+    for m in raw_fixtures:
         league_id = m["league"]["id"]
         if league_id not in allowed_leagues:
+            skipped_league += 1
             continue
 
         fixture = m.get("fixture", {})
@@ -67,11 +86,13 @@ def update_matches():
 
         # Skip games that have already finished
         if status_short in _FINISHED_STATUSES:
+            skipped_status += 1
             continue
 
         # Also skip games that are currently live (let the next refresh pick
         # them up if they get postponed; we don't want live games in parlays)
         if status_short not in _NOT_STARTED_STATUSES:
+            skipped_status += 1
             continue
 
         # Secondary guard: skip if the kickoff time is already in the past
@@ -82,6 +103,7 @@ def update_matches():
                 if kickoff_dt.tzinfo is None:
                     kickoff_dt = kickoff_dt.replace(tzinfo=timezone.utc)
                 if kickoff_dt <= now_utc:
+                    skipped_kickoff += 1
                     continue
             except (ValueError, TypeError):
                 pass  # keep fixture if we can't parse the time
@@ -94,6 +116,20 @@ def update_matches():
             "kickoff_utc": kickoff_str,
             "status": status_short,
         })
+
+    logger.info(
+        "update_matches: of %d fixture(s) — %d filtered by league, %d by status, "
+        "%d by past kickoff, %d ready to write",
+        total_from_api, skipped_league, skipped_status, skipped_kickoff, len(matches),
+    )
+
+    if not matches:
+        logger.warning(
+            "update_matches: 0 valid matches for %s — existing CSV NOT overwritten "
+            "(API returned %d fixture(s) in total)",
+            today, total_from_api,
+        )
+        return
 
     os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
 

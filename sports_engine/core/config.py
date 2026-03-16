@@ -117,6 +117,8 @@ ALLOWED_LEAGUE_IDS = {
     39: "Premier League",
     140: "La Liga",
     2: "Champions League",
+    135: "Serie A",
+    78: "Bundesliga",
 }
 
 # ===============================

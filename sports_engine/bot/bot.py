@@ -95,7 +95,10 @@ def _refresh_matches_if_stale() -> None:
         update_matches()
         _last_csv_update = _time.time()
     except Exception as exc:
-        logger.warning("No se pudieron actualizar los partidos: %s", exc)
+        logger.warning(
+            "Could not update matches: %s — type: %s",
+            exc, type(exc).__name__,
+        )
     finally:
         _matches_lock.release()
 
@@ -128,38 +131,57 @@ def load_today_matches():
     try:
         with open(DATA_PATH, newline="", encoding="utf-8") as csvfile:
             reader = csv.DictReader(csvfile)
-            for row in reader:
-                # Date filter
-                row_date = row.get("date", "").strip()
-                if row_date and row_date != today:
-                    continue
+            all_rows = list(reader)
 
-                # Status filter: skip live / finished games
-                status = row.get("status", "NS").strip()
-                if status and status not in _pending:
-                    continue
+        total_rows = len(all_rows)
+        skipped_date = skipped_status = skipped_kickoff = 0
 
-                # Kickoff time filter: skip games already past kick-off
-                kickoff_str = row.get("kickoff_utc", "").strip()
-                if kickoff_str:
-                    try:
-                        # normalise to a naive UTC datetime for comparison
-                        kickoff_dt = datetime.fromisoformat(
-                            kickoff_str.replace("Z", "+00:00")
-                        )
-                        if kickoff_dt.tzinfo is not None:
-                            kickoff_dt = kickoff_dt.astimezone(timezone.utc).replace(tzinfo=None)
-                        if kickoff_dt <= now_utc:
-                            continue
-                    except (ValueError, TypeError):
-                        pass  # keep if unparseable
+        for row in all_rows:
+            # Date filter
+            row_date = row.get("date", "").strip()
+            if row_date and row_date != today:
+                skipped_date += 1
+                continue
 
-                matches.append({
-                    "home": row["home"].strip(),
-                    "away": row["away"].strip(),
-                    "league": row.get("league", "").strip(),
-                    "sport": "soccer",
-                })
+            # Status filter: skip live / finished games
+            status = row.get("status", "NS").strip()
+            if status and status not in _pending:
+                skipped_status += 1
+                continue
+
+            # Kickoff time filter: skip games already past kick-off
+            kickoff_str = row.get("kickoff_utc", "").strip()
+            if kickoff_str:
+                try:
+                    # normalise to a naive UTC datetime for comparison
+                    kickoff_dt = datetime.fromisoformat(
+                        kickoff_str.replace("Z", "+00:00")
+                    )
+                    if kickoff_dt.tzinfo is not None:
+                        kickoff_dt = kickoff_dt.astimezone(timezone.utc).replace(tzinfo=None)
+                    if kickoff_dt <= now_utc:
+                        skipped_kickoff += 1
+                        continue
+                except (ValueError, TypeError):
+                    pass  # keep if unparseable
+
+            matches.append({
+                "home": row["home"].strip(),
+                "away": row["away"].strip(),
+                "league": row.get("league", "").strip(),
+                "sport": "soccer",
+            })
+
+        logger.info(
+            "load_today_matches: CSV had %d row(s) — %d filtered by different date, "
+            "%d by status, %d by past kickoff — %d match(es) loaded for today (%s)",
+            total_rows, skipped_date, skipped_status, skipped_kickoff, len(matches), today,
+        )
+        if skipped_date > 0 and len(matches) == 0:
+            logger.warning(
+                "load_today_matches: all CSV rows are from a different date "
+                "(stale data?). Check API_SPORTS_KEY and last update_matches() run."
+            )
     except Exception as e:
         logger.error("Error al cargar partidos: %s", e)
 
@@ -2485,6 +2507,19 @@ async def parlay_dream_command(update: Update, context: ContextTypes.DEFAULT_TYP
     matches = load_today_matches_multisport()
     using_tomorrow = False
 
+    # Diagnostic log: show exactly what was loaded before generating predictions
+    soccer_matches = [m for m in matches if m.get("sport") == "soccer"]
+    other_matches  = [m for m in matches if m.get("sport") != "soccer"]
+    logger.info(
+        "parlay_dream_command: %d match(es) loaded — %d soccer, %d other sports",
+        len(matches), len(soccer_matches), len(other_matches),
+    )
+    if not soccer_matches:
+        logger.warning(
+            "parlay_dream_command: 0 soccer matches available — "
+            "CSV may be stale or API_SPORTS_KEY may be invalid"
+        )
+
     # ── Quick prediction run to test if today is enough ───────────────────
     semaphore = _asyncio.Semaphore(5)
 
@@ -2555,6 +2590,25 @@ async def parlay_dream_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
     text = format_parlay_dream(bundles, parlay_id=parlay_id,
                                includes_tomorrow=using_tomorrow)
+
+    # ── Append data-freshness indicator ───────────────────────────────────
+    try:
+        if os.path.exists(DATA_PATH) and soccer_matches:
+            csv_mtime = os.path.getmtime(DATA_PATH)
+            updated_dt = datetime.fromtimestamp(csv_mtime, tz=timezone.utc)
+            text += (
+                f"\n\n🕐 _Datos actualizados: "
+                f"{updated_dt.strftime('%Y-%m-%d %H:%M')} UTC_"
+            )
+        elif not soccer_matches:
+            text += (
+                "\n\n⚠️ _No se encontraron partidos de fútbol para hoy. "
+                "Los datos mostrados pueden no estar actualizados. "
+                "Verifica que API\\_SPORTS\\_KEY esté configurada correctamente._"
+            )
+    except Exception:
+        pass  # freshness indicator is best-effort
+
     try:
         await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as exc:
