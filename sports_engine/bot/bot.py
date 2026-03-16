@@ -175,10 +175,12 @@ def load_today_matches():
                     pass  # keep if unparseable
 
             matches.append({
-                "home": row["home"].strip(),
-                "away": row["away"].strip(),
-                "league": row.get("league", "").strip(),
-                "sport": "soccer",
+                "home":       row["home"].strip(),
+                "away":       row["away"].strip(),
+                "league":     row.get("league", "").strip(),
+                "sport":      "soccer",
+                "round":      row.get("round", "").strip(),
+                "tournament": row.get("tournament", "").strip(),
             })
 
         logger.info(
@@ -235,10 +237,14 @@ def load_today_matches_multisport() -> list:
                         )
                         continue
                     matches.append({
-                        "home": g["home"],
-                        "away": g["away"],
+                        "home":   g["home"],
+                        "away":   g["away"],
                         "league": sport.upper(),
-                        "sport": sport,
+                        "sport":  sport,
+                        # ESPN game name may contain playoff round info
+                        # (e.g. "NBA Playoffs - Conference Finals - Game 3")
+                        "round":      g.get("name", ""),
+                        "tournament": sport.upper(),
                     })
             except Exception as exc:
                 logger.warning("ESPN scoreboard unavailable for %s: %s", sport, exc)
@@ -271,6 +277,7 @@ def load_tomorrow_matches_multisport() -> list:
     _pending = {"NS", "TBD", "PST", "SUSP", "INT"}
     # Prefer the dedicated tomorrow CSV; fall back to today's CSV (which only
     # helps if it somehow contains tomorrow-dated rows, e.g. late-night fetches)
+    _loaded_from: str = ""
     for _csv_path in (DATA_PATH_TOMORROW, DATA_PATH):
         try:
             with open(_csv_path, newline="", encoding="utf-8") as csvfile:
@@ -282,12 +289,15 @@ def load_tomorrow_matches_multisport() -> list:
                     if status and status not in _pending:
                         continue
                     matches.append({
-                        "home":   row["home"].strip(),
-                        "away":   row["away"].strip(),
-                        "league": row.get("league", "").strip(),
-                        "sport":  "soccer",
+                        "home":       row["home"].strip(),
+                        "away":       row["away"].strip(),
+                        "league":     row.get("league", "").strip(),
+                        "sport":      "soccer",
+                        "round":      row.get("round", "").strip(),
+                        "tournament": row.get("tournament", "").strip(),
                     })
             if matches:
+                _loaded_from = _csv_path
                 # Found valid rows in this CSV — no need to try the fallback
                 break
         except (FileNotFoundError, OSError):
@@ -296,8 +306,9 @@ def load_tomorrow_matches_multisport() -> list:
             logger.debug("load_tomorrow_matches_multisport: soccer CSV error (%s): %s", _csv_path, exc)
 
     logger.debug(
-        "load_tomorrow_matches_multisport: %d soccer match(es) for %s",
+        "load_tomorrow_matches_multisport: %d soccer match(es) for %s (source: %s)",
         len(matches), tomorrow_str,
+        os.path.basename(_loaded_from) if _loaded_from else "none",
     )
 
     # ── NBA / NFL / MLB from ESPN (tomorrow's date) ────────────────────────
@@ -311,10 +322,12 @@ def load_tomorrow_matches_multisport() -> list:
                     if g.get("status", "Scheduled") not in _espn_scheduled:
                         continue
                     matches.append({
-                        "home":   g["home"],
-                        "away":   g["away"],
-                        "league": sport.upper(),
-                        "sport":  sport,
+                        "home":       g["home"],
+                        "away":       g["away"],
+                        "league":     sport.upper(),
+                        "sport":      sport,
+                        "round":      g.get("name", ""),
+                        "tournament": sport.upper(),
                     })
             except Exception as exc:
                 logger.debug("ESPN tomorrow scoreboard %s: %s", sport, exc)
@@ -2280,10 +2293,12 @@ async def _predict_one(m: dict, semaphore: "_asyncio.Semaphore") -> dict | None:
     timeout.  Wrapped in a semaphore to cap concurrent ESPN/API calls.
     """
     async with semaphore:
-        sport  = m.get("sport", "soccer").lower()
-        home   = m["home"]
-        away   = m["away"]
-        league = m.get("league", "default")
+        sport      = m.get("sport", "soccer").lower()
+        home       = m["home"]
+        away       = m["away"]
+        league     = m.get("league", "default")
+        round_str  = m.get("round", "")
+        tournament = m.get("tournament", "") or league
 
         def _sync_predict():
             if sport == "nba":
@@ -2292,7 +2307,8 @@ async def _predict_one(m: dict, semaphore: "_asyncio.Semaphore") -> dict | None:
                 return _nfl.predict_game(home, away)
             if sport == "mlb":
                 return _baseball.predict_game(home, away)
-            return get_full_prediction(home, away, league=league, fetch_live=True)
+            return get_full_prediction(home, away, league=league,
+                                       fetch_live=True, round_str=round_str)
 
         loop = _asyncio.get_event_loop()
         try:
@@ -2301,6 +2317,20 @@ async def _predict_one(m: dict, semaphore: "_asyncio.Semaphore") -> dict | None:
                 timeout=15.0,
             )
             pred.setdefault("league", league)
+            # Attach tournament stage info for all sports so parlay display
+            # can show stage badges regardless of sport.
+            pred.setdefault("round", round_str)
+            pred.setdefault("tournament", tournament)
+            if not pred.get("stage_key"):
+                # Non-soccer predictors don't set stage_key — derive it here
+                try:
+                    from core.tournament import detect_stage
+                    _sk, _sl = detect_stage(round_str)
+                    pred["stage_key"]   = _sk
+                    pred["stage_label"] = _sl
+                except Exception:
+                    pred["stage_key"]   = ""
+                    pred["stage_label"] = ""
             return pred
         except _asyncio.TimeoutError:
             logger.warning("Parlay: timeout %s vs %s (%s)", home, away, sport)

@@ -121,12 +121,14 @@ def update_matches(date: str = None, data_path: str = None):
                 pass  # keep fixture if we can't parse the time
 
         matches.append({
-            "home": m["teams"]["home"]["name"],
-            "away": m["teams"]["away"]["name"],
-            "league": allowed_leagues[league_id],
-            "date": today,
+            "home":       m["teams"]["home"]["name"],
+            "away":       m["teams"]["away"]["name"],
+            "league":     allowed_leagues[league_id],
+            "date":       today,
             "kickoff_utc": kickoff_str,
-            "status": status_short,
+            "status":     status_short,
+            "round":      m["league"].get("round", ""),
+            "tournament": m["league"].get("name", ""),
         })
 
     logger.info(
@@ -136,17 +138,27 @@ def update_matches(date: str = None, data_path: str = None):
     )
 
     if not matches:
-        logger.warning(
-            "update_matches: 0 valid matches for %s — existing CSV NOT overwritten "
-            "(API returned %d fixture(s) in total)",
-            today, total_from_api,
-        )
+        if total_from_api == 0:
+            logger.warning(
+                "update_matches: API returned 0 fixtures for %s "
+                "(no games scheduled or API key exhausted)",
+                today,
+            )
+        else:
+            logger.warning(
+                "update_matches: 0 valid matches for %s after filtering — "
+                "existing CSV NOT overwritten "
+                "(%d fixture(s) returned but %d filtered by league, "
+                "%d by status, %d by past kickoff)",
+                today, total_from_api, skipped_league, skipped_status, skipped_kickoff,
+            )
         return
 
     os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
 
     with open(DATA_PATH, "w", newline="", encoding="utf-8") as csvfile:
-        fieldnames = ["home", "away", "league", "date", "kickoff_utc", "status"]
+        fieldnames = ["home", "away", "league", "date", "kickoff_utc", "status",
+                      "round", "tournament"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         for m in matches:

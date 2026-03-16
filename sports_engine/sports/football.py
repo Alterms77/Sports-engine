@@ -331,6 +331,7 @@ def predict_match(
     league: str = "default",
     odds: dict = None,
     live_context: dict = None,
+    round_str: str = "",
 ) -> dict:
     """
     Predict a football match.
@@ -344,6 +345,10 @@ def predict_match(
                      "home_form" and "away_form" (live form data from SofaScore
                      or TheSportsDB).  When provided, live attack/defense averages
                      blend with the CSV-based model for greater accuracy.
+    round_str      : optional API-Football ``round`` string (e.g.
+                     ``"Round of 16 - 1st Leg"``, ``"Semi-finals"``,
+                     ``"3rd Qualifying Round"``).  When provided, stage-specific
+                     xG and BTTS modifiers are applied automatically.
     """
     home_resolved = resolve_team(home)
     away_resolved = resolve_team(away)
@@ -360,6 +365,29 @@ def predict_match(
     xg_home, xg_away = expected_goals(
         home_resolved, away_resolved, league, live_context=live_context
     )
+
+    # ── Tournament stage adjustments ─────────────────────────────────────────
+    # Scale xG down for knockout/qualification pressure before running the
+    # statistical models so all derived probabilities (Dixon-Coles, MC,
+    # corners, BTTS …) reflect the actual stage characteristics.
+    _stage_key   = ""
+    _stage_label = ""
+    if round_str:
+        try:
+            from core.tournament import detect_stage, get_stage_modifiers
+            _stage_key, _stage_label = detect_stage(round_str)
+            _xg_mult, _ha_mult, _btts_adj = get_stage_modifiers(_stage_key)
+            if _xg_mult != 1.0:
+                xg_home = round(xg_home * _xg_mult, 4)
+                xg_away = round(xg_away * _xg_mult, 4)
+            # home_advantage_multiplier: in neutral-venue finals the home edge
+            # shrinks.  We apply it as a relative shift: boost away xG slightly
+            # when ha_mult < 1 (less home advantage).
+            if _ha_mult != 1.0:
+                away_boost = 2.0 - _ha_mult   # e.g. 0.92 → away gets ×1.08
+                xg_away = round(xg_away * away_boost, 4)
+        except Exception:
+            pass  # graceful fallback — never block a prediction
 
     # Dixon-Coles analytical probabilities
     probs = dixon_coles_probabilities(xg_home, xg_away)
@@ -381,6 +409,18 @@ def predict_match(
         "over_3_5": probs["over_3_5"],
         "btts": probs["btts"],
     }
+
+    # ── Apply BTTS stage adjustment ───────────────────────────────────────────
+    if round_str and _stage_key:
+        try:
+            from core.tournament import get_stage_modifiers
+            _, _, _btts_adj = get_stage_modifiers(_stage_key)
+            if _btts_adj != 0.0:
+                final_probs["btts"] = round(
+                    max(0.0, min(100.0, final_probs["btts"] + _btts_adj)), 1
+                )
+        except Exception:
+            pass
 
     # Value bets (only when user provides odds)
     value = {}
@@ -590,6 +630,10 @@ def predict_match(
         "away_elo": away_elo,
         # ── Shot metrics (§1-§5) ──
         "shot_metrics": _shot_context,
+        # ── Tournament stage info ──
+        "round":       round_str,
+        "stage_key":   _stage_key,
+        "stage_label": _stage_label,
     }
 
     # ── Advanced predictions (DNB, Double Chance, AH, HT/FT, team totals) ──
@@ -620,6 +664,7 @@ def get_full_prediction(
     odds: dict = None,
     live_context: dict = None,
     fetch_live: bool = False,
+    round_str: str = "",
 ) -> dict:
     """
     Full prediction for a football match.
@@ -632,11 +677,14 @@ def get_full_prediction(
     live_context  : pre-fetched live context dict (keys: "home_form", "away_form")
     fetch_live    : if True, automatically fetch live context from SofaScore/TheSportsDB
                     before prediction (adds network latency but improves accuracy)
+    round_str     : optional API-Football round string for tournament stage adjustments
+                    (e.g. ``"Semi-finals - 1st Leg"``, ``"3rd Qualifying Round"``)
     """
     if fetch_live and live_context is None:
         live_context = _fetch_live_context(home, away)
 
-    return predict_match(home, away, league=league, odds=odds, live_context=live_context)
+    return predict_match(home, away, league=league, odds=odds,
+                         live_context=live_context, round_str=round_str)
 
 
 def _fetch_live_context(home: str, away: str) -> dict:
