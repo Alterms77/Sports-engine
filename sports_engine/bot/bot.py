@@ -114,17 +114,43 @@ def _refresh_matches_if_stale() -> None:
 
 
 def load_today_matches():
-    """Load upcoming soccer matches from the local CSV.
+    """Load upcoming soccer matches, preferring Postgres when available.
 
-    Filters applied at read time (defensive double-check):
+    When DATABASE_URL is configured the function queries the ``fixtures``
+    table for not-started matches with kickoff in the next 24 hours so that
+    finished matches are never included, even if the CSV is stale.
+
+    Filters applied to the CSV fallback path (defensive double-check):
     - ``date`` column must equal today's date.
     - ``status`` column (if present) must indicate a not-started game.
     - ``kickoff_utc`` column (if present) must be in the future.
-
-    These filters mirror what ``update_matches()`` applies when writing, so
-    stale rows left over from a previous run of the update job are discarded
-    automatically without requiring a CSV rewrite.
     """
+    # ── Try Postgres first ────────────────────────────────────────────────
+    try:
+        from core.db import is_available as _db_ok, get_upcoming_fixtures
+        if _db_ok():
+            db_rows = get_upcoming_fixtures(hours=24)
+            matches = []
+            for row in db_rows:
+                matches.append({
+                    "home":       row["home_team"],
+                    "away":       row["away_team"],
+                    "league":     row.get("league_name", ""),
+                    "sport":      row.get("sport", "soccer"),
+                    "round":      "",
+                    "tournament": row.get("league_name", ""),
+                })
+            logger.info(
+                "load_today_matches: %d upcoming match(es) loaded from Postgres",
+                len(matches),
+            )
+            return matches
+    except Exception as exc:
+        logger.warning(
+            "load_today_matches: DB read failed, falling back to CSV — %s", exc
+        )
+
+    # ── CSV fallback (local dev or DB unavailable) ────────────────────────
     matches = []
     _now_utc = datetime.now(timezone.utc)
     today    = _now_utc.strftime("%Y-%m-%d")
