@@ -14,6 +14,10 @@ if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
 from core.config import API_SPORTS_KEY, API_SPORTS_BASE_URL, ALLOWED_LEAGUE_IDS
+from core.db import is_available as _db_available
+from core.db import ensure_table as _db_ensure_table
+from core.db import upsert_fixtures as _db_upsert
+from core.db import build_fixture_row as _build_row
 
 # API-Sports fixture status codes that mean the game has NOT yet kicked off.
 _NOT_STARTED_STATUSES = {"NS", "TBD", "PST", "SUSP", "INT"}
@@ -82,6 +86,7 @@ def update_matches(date: str = None, data_path: str = None):
     logger.info("update_matches: API returned %d fixture(s) in total for %s", total_from_api, today)
 
     matches = []
+    db_rows = []          # all allowed-league fixtures (including finished) for DB
     now_utc = datetime.now(timezone.utc)
     skipped_league = 0
     skipped_status = 0
@@ -95,8 +100,33 @@ def update_matches(date: str = None, data_path: str = None):
 
         fixture = m.get("fixture", {})
         status_short = fixture.get("status", {}).get("short", "NS")
+        kickoff_str = fixture.get("date", "")  # ISO 8601, e.g. "2024-03-15T20:00:00+00:00"
 
-        # Skip games that have already finished
+        # Parse kickoff into a timezone-aware datetime for DB storage
+        kickoff_dt = None
+        if kickoff_str:
+            try:
+                kickoff_dt = datetime.fromisoformat(kickoff_str.replace("Z", "+00:00"))
+                if kickoff_dt.tzinfo is None:
+                    kickoff_dt = kickoff_dt.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                kickoff_dt = None
+
+        # Always record fixture in DB (including finished ones) so that past
+        # matches are never re-introduced into parlay generation.
+        db_rows.append(
+            _build_row(
+                fixture_id=fixture.get("id", ""),
+                home=m["teams"]["home"]["name"],
+                away=m["teams"]["away"]["name"],
+                league_id=league_id,
+                league_name=m["league"].get("name", ""),
+                kickoff_utc=kickoff_dt,
+                status_short=status_short,
+            )
+        )
+
+        # Skip games that have already finished (CSV only contains upcoming)
         if status_short in _FINISHED_STATUSES:
             skipped_status += 1
             continue
@@ -108,17 +138,9 @@ def update_matches(date: str = None, data_path: str = None):
             continue
 
         # Secondary guard: skip if the kickoff time is already in the past
-        kickoff_str = fixture.get("date", "")  # ISO 8601, e.g. "2024-03-15T20:00:00+00:00"
-        if kickoff_str:
-            try:
-                kickoff_dt = datetime.fromisoformat(kickoff_str.replace("Z", "+00:00"))
-                if kickoff_dt.tzinfo is None:
-                    kickoff_dt = kickoff_dt.replace(tzinfo=timezone.utc)
-                if kickoff_dt <= now_utc:
-                    skipped_kickoff += 1
-                    continue
-            except (ValueError, TypeError):
-                pass  # keep fixture if we can't parse the time
+        if kickoff_dt is not None and kickoff_dt <= now_utc:
+            skipped_kickoff += 1
+            continue
 
         matches.append({
             "home":       m["teams"]["home"]["name"],
@@ -136,6 +158,16 @@ def update_matches(date: str = None, data_path: str = None):
         "%d by past kickoff, %d ready to write",
         total_from_api, skipped_league, skipped_status, skipped_kickoff, len(matches),
     )
+
+    # Upsert ALL allowed-league fixtures (including finished) into Postgres so
+    # that parlay generation can always exclude previously-seen finished matches.
+    if db_rows and _db_available():
+        _db_ensure_table()
+        n = _db_upsert(db_rows)
+        logger.info(
+            "update_matches: upserted %d fixture(s) to Postgres (total for date: %d)",
+            n, len(db_rows),
+        )
 
     if not matches:
         if total_from_api == 0:
