@@ -281,11 +281,43 @@ def detect_league(home_team: str, away_team: str) -> str:
 
 
 def validate_config() -> bool:
-    """Validate that required environment variables are set."""
+    """Validate that required environment variables are set and log API key status."""
     ok = True
     if not TELEGRAM_TOKEN:
         logger.error("TOKEN environment variable is not set")
         ok = False
-    if not API_SPORTS_KEY:
-        logger.warning("API_SPORTS_KEY environment variable is not set – live match updates disabled")
+
+    # Report optional API key status so Railway logs make it clear what's available
+    if API_SPORTS_KEY:
+        logger.info("API_SPORTS_KEY: configured ✓ (live soccer fixtures enabled)")
+    else:
+        logger.warning(
+            "API_SPORTS_KEY: NOT set — live soccer match updates disabled. "
+            "Set this in Railway to get today's real fixtures."
+        )
+
+    if SPORTRADAR_API_KEY:
+        logger.info(
+            "SPORTRADAR_API_KEY: configured ✓ (access level: %s)",
+            SPORTRADAR_ACCESS or "production",
+        )
+    else:
+        logger.info(
+            "SPORTRADAR_API_KEY: not set (optional — ESPN stats used instead)"
+        )
+
+    if ODDS_API_KEY:
+        logger.info("ODDS_API_KEY: configured ✓ (auto-scanner will use live odds)")
+    else:
+        logger.info(
+            "ODDS_API_KEY: not set (optional — auto-scanner uses model-based odds)"
+        )
+
+    if ALERTS_CHANNEL_ID:
+        logger.info("ALERTS_CHANNEL_ID: configured ✓ (%s)", ALERTS_CHANNEL_ID)
+    else:
+        logger.info(
+            "ALERTS_CHANNEL_ID: not set (optional — daily alerts sent to subscribers only)"
+        )
+
     return ok

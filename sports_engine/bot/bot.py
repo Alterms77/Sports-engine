@@ -71,6 +71,7 @@ logger = logging.getLogger(__name__)
 # ===============================
 
 DATA_PATH = os.path.join(_SPORTS_ENGINE_DIR, "data", "today_matches.csv")
+DATA_PATH_TOMORROW = os.path.join(_SPORTS_ENGINE_DIR, "data", "tomorrow_matches.csv")
 
 # TTL (seconds) between automatic CSV refreshes.
 # 10 minutes keeps soccer fixtures fresh throughout the day so that games
@@ -83,7 +84,7 @@ _last_csv_update: float = 0.0  # epoch seconds of last successful update
 
 
 def _refresh_matches_if_stale() -> None:
-    """Refresh the football CSV if the TTL has expired. Thread-safe, non-blocking."""
+    """Refresh the football CSV files if the TTL has expired. Thread-safe, non-blocking."""
     global _last_csv_update
     now = _time.time()
     if now - _last_csv_update < MATCHES_UPDATE_TTL:
@@ -93,6 +94,14 @@ def _refresh_matches_if_stale() -> None:
         return
     try:
         update_matches()
+        _tomorrow_str = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+        try:
+            update_matches(date=_tomorrow_str, data_path=DATA_PATH_TOMORROW)
+        except Exception as exc:
+            logger.warning(
+                "Could not update tomorrow's matches: %s — type: %s",
+                exc, type(exc).__name__,
+            )
         _last_csv_update = _time.time()
     except Exception as exc:
         logger.warning(
@@ -247,7 +256,9 @@ def load_tomorrow_matches_multisport() -> list:
 
     Sources
     -------
-    - Soccer : local ``today_matches.csv`` filtered to tomorrow's date
+    - Soccer : local ``tomorrow_matches.csv`` (written by ``update_matches()``
+               with tomorrow's date; falls back to ``today_matches.csv`` for
+               compatibility with older deployments that lack the tomorrow CSV)
     - NBA / NFL / MLB : ESPN scoreboard with ``dates=YYYYMMDD`` for tomorrow
     """
     tomorrow_dt  = datetime.now(timezone.utc) + timedelta(days=1)
@@ -256,25 +267,38 @@ def load_tomorrow_matches_multisport() -> list:
 
     matches: list = []
 
-    # ── Soccer from local CSV filtered to tomorrow ─────────────────────────
-    now_utc  = datetime.now(timezone.utc).replace(tzinfo=None)
+    # ── Soccer from tomorrow_matches.csv ──────────────────────────────────
     _pending = {"NS", "TBD", "PST", "SUSP", "INT"}
-    try:
-        with open(DATA_PATH, newline="", encoding="utf-8") as csvfile:
-            for row in csv.DictReader(csvfile):
-                if row.get("date", "").strip() != tomorrow_str:
-                    continue
-                status = row.get("status", "NS").strip()
-                if status and status not in _pending:
-                    continue
-                matches.append({
-                    "home":   row["home"].strip(),
-                    "away":   row["away"].strip(),
-                    "league": row.get("league", "").strip(),
-                    "sport":  "soccer",
-                })
-    except Exception as exc:
-        logger.debug("load_tomorrow_matches_multisport: soccer CSV error: %s", exc)
+    # Prefer the dedicated tomorrow CSV; fall back to today's CSV (which only
+    # helps if it somehow contains tomorrow-dated rows, e.g. late-night fetches)
+    for _csv_path in (DATA_PATH_TOMORROW, DATA_PATH):
+        try:
+            with open(_csv_path, newline="", encoding="utf-8") as csvfile:
+                for row in csv.DictReader(csvfile):
+                    # Enforce date: only rows that belong to tomorrow
+                    if row.get("date", "").strip() != tomorrow_str:
+                        continue
+                    status = row.get("status", "NS").strip()
+                    if status and status not in _pending:
+                        continue
+                    matches.append({
+                        "home":   row["home"].strip(),
+                        "away":   row["away"].strip(),
+                        "league": row.get("league", "").strip(),
+                        "sport":  "soccer",
+                    })
+            if matches:
+                # Found valid rows in this CSV — no need to try the fallback
+                break
+        except (FileNotFoundError, OSError):
+            pass
+        except Exception as exc:
+            logger.debug("load_tomorrow_matches_multisport: soccer CSV error (%s): %s", _csv_path, exc)
+
+    logger.debug(
+        "load_tomorrow_matches_multisport: %d soccer match(es) for %s",
+        len(matches), tomorrow_str,
+    )
 
     # ── NBA / NFL / MLB from ESPN (tomorrow's date) ────────────────────────
     _espn_scheduled = {"Scheduled", "Pregame", "Pre-Game"}
@@ -2295,6 +2319,13 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Refresh soccer CSV if stale ────────────────────────────────────────
     _refresh_matches_if_stale()
 
+    # ── Bust the ESPN cache so NBA/NFL/MLB statuses are fresh ──────────────
+    try:
+        from api.espn_api import clear_cache
+        clear_cache()
+    except Exception:
+        pass
+
     # ── Load today's matches across all supported sports ──────────────────
     matches = load_today_matches_multisport()
     if not matches:
@@ -2422,6 +2453,13 @@ async def parlay_safe_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     # ── Refresh soccer CSV if stale ────────────────────────────────────────
     _refresh_matches_if_stale()
 
+    # ── Bust the ESPN cache so NBA/NFL/MLB statuses are fresh ──────────────
+    try:
+        from api.espn_api import clear_cache
+        clear_cache()
+    except Exception:
+        pass
+
     # ── Load today's matches across all supported sports ──────────────────
     matches = load_today_matches_multisport()
     if not matches:
@@ -2502,6 +2540,13 @@ async def parlay_dream_command(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # ── Refresh soccer CSV if stale ────────────────────────────────────────
     _refresh_matches_if_stale()
+
+    # ── Bust the ESPN cache so NBA/NFL/MLB statuses are fresh ──────────────
+    try:
+        from api.espn_api import clear_cache
+        clear_cache()
+    except Exception:
+        pass
 
     # ── Load today's matches ───────────────────────────────────────────────
     matches = load_today_matches_multisport()
@@ -4313,6 +4358,13 @@ def main():
         _last_csv_update = _time.time()
     except Exception as e:
         logger.warning("No se pudieron actualizar los partidos: %s", e)
+
+    # Pre-fetch tomorrow's soccer fixtures so parlay_dream fallback has data
+    try:
+        _tomorrow_str = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+        update_matches(date=_tomorrow_str, data_path=DATA_PATH_TOMORROW)
+    except Exception as e:
+        logger.warning("No se pudieron pre-cargar partidos de mañana: %s", e)
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 

@@ -22,8 +22,16 @@ _NOT_STARTED_STATUSES = {"NS", "TBD", "PST", "SUSP", "INT"}
 _FINISHED_STATUSES = {"FT", "AET", "PEN", "AWD", "WO", "ABD", "CANC"}
 
 
-def update_matches():
-    """Fetch today's soccer fixtures from API-Sports and write to CSV.
+def update_matches(date: str = None, data_path: str = None):
+    """Fetch soccer fixtures from API-Sports for *date* and write to *data_path*.
+
+    Parameters
+    ----------
+    date : str, optional
+        ISO date string ``"YYYY-MM-DD"`` to query.  Defaults to today (UTC).
+    data_path : str, optional
+        Absolute path of the CSV file to write.  Defaults to
+        ``<this_dir>/data/today_matches.csv``.
 
     Only fixtures that have NOT yet kicked off are written so that:
     - Stale games from previous days are excluded (date filter).
@@ -44,9 +52,13 @@ def update_matches():
     allowed_leagues = ALLOWED_LEAGUE_IDS
 
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    DATA_PATH = os.path.join(BASE_DIR, "data", "today_matches.csv")
+    if data_path is None:
+        data_path = os.path.join(BASE_DIR, "data", "today_matches.csv")
+    DATA_PATH = data_path
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if date is None:
+        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = date  # alias for readability in the rest of the function
     params = {"date": today}
 
     logger.info("update_matches: querying fixtures for date %s", today)
