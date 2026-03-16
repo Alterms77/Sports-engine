@@ -1473,6 +1473,11 @@ def _build_dream_bundle(pred: dict) -> dict | None:
         "narrative":    narrative,
         "legs":         selected,
         "bundle_prob":  round(bundle_prob * 100, 1),
+        # Tournament / stage metadata for display
+        "stage_label":  pred.get("stage_label", ""),
+        "stage_key":    pred.get("stage_key", ""),
+        "tournament":   pred.get("tournament", "") or pred.get("league", ""),
+        "round":        pred.get("round", ""),
     }
 
 
@@ -1583,9 +1588,24 @@ def format_parlay_dream(bundles: list, parlay_id: str = "",
 
         for bundle in bundles:
             lines.append("━━━━━━━━━━━━━━━━━━━━")
-            sport_emoji = bundle.get("sport_emoji", "🎯")
-            match_s     = _md_escape(bundle["match"])
+            sport_emoji   = bundle.get("sport_emoji", "🎯")
+            match_s       = _md_escape(bundle["match"])
+            stage_label   = bundle.get("stage_label", "")
+            stage_key     = bundle.get("stage_key", "")
+            tournament_s  = _md_escape(bundle.get("tournament", ""))
+
+            # Match header
             lines.append(f"{sport_emoji} *{match_s}*")
+
+            # Tournament / stage badge — only for notable stages
+            if stage_label and stage_key not in ("regular", ""):
+                badge = f"  _{stage_label}_"
+                if tournament_s and tournament_s not in (
+                    "NBA", "NFL", "MLB", "soccer", "Soccer"
+                ):
+                    badge += f"  ·  _{tournament_s}_"
+                lines.append(badge)
+
             lines.append(bundle["narrative"])
             lines.append("")
             for j, leg in enumerate(bundle["legs"]):

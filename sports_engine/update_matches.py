@@ -22,14 +22,25 @@ _NOT_STARTED_STATUSES = {"NS", "TBD", "PST", "SUSP", "INT"}
 _FINISHED_STATUSES = {"FT", "AET", "PEN", "AWD", "WO", "ABD", "CANC"}
 
 
-def update_matches():
-    """Fetch today's soccer fixtures from API-Sports and write to CSV.
+def update_matches(date: str = None, data_path: str = None):
+    """Fetch soccer fixtures from API-Sports for *date* and write to *data_path*.
+
+    Parameters
+    ----------
+    date : str, optional
+        ISO date string ``"YYYY-MM-DD"`` to query.  Defaults to today (UTC).
+    data_path : str, optional
+        Absolute path of the CSV file to write.  Defaults to
+        ``<this_dir>/data/today_matches.csv``.
 
     Only fixtures that have NOT yet kicked off are written so that:
     - Stale games from previous days are excluded (date filter).
     - Games that have already started or finished are excluded (status filter).
 
     Columns written: home, away, league, date, kickoff_utc, status
+
+    The CSV is only overwritten when at least one valid match is found, so
+    a failed or empty API response never destroys last-known-good data.
     """
 
     if not API_SPORTS_KEY:
@@ -41,10 +52,16 @@ def update_matches():
     allowed_leagues = ALLOWED_LEAGUE_IDS
 
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    DATA_PATH = os.path.join(BASE_DIR, "data", "today_matches.csv")
+    if data_path is None:
+        data_path = os.path.join(BASE_DIR, "data", "today_matches.csv")
+    DATA_PATH = data_path
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if date is None:
+        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = date  # alias for readability in the rest of the function
     params = {"date": today}
+
+    logger.info("update_matches: querying fixtures for date %s", today)
 
     try:
         r = requests.get(url, headers=headers, params=params, timeout=10)
@@ -54,12 +71,26 @@ def update_matches():
         logger.warning("API-Sports request failed for date %s: %s", today, exc)
         return
 
+    # Check for API-level errors reported in the response body
+    api_errors = data.get("errors", {})
+    if api_errors:
+        logger.warning("API-Sports returned errors for date %s: %s", today, api_errors)
+        return
+
+    raw_fixtures = data.get("response", [])
+    total_from_api = len(raw_fixtures)
+    logger.info("update_matches: API returned %d fixture(s) in total for %s", total_from_api, today)
+
     matches = []
     now_utc = datetime.now(timezone.utc)
+    skipped_league = 0
+    skipped_status = 0
+    skipped_kickoff = 0
 
-    for m in data.get("response", []):
+    for m in raw_fixtures:
         league_id = m["league"]["id"]
         if league_id not in allowed_leagues:
+            skipped_league += 1
             continue
 
         fixture = m.get("fixture", {})
@@ -67,11 +98,13 @@ def update_matches():
 
         # Skip games that have already finished
         if status_short in _FINISHED_STATUSES:
+            skipped_status += 1
             continue
 
         # Also skip games that are currently live (let the next refresh pick
         # them up if they get postponed; we don't want live games in parlays)
         if status_short not in _NOT_STARTED_STATUSES:
+            skipped_status += 1
             continue
 
         # Secondary guard: skip if the kickoff time is already in the past
@@ -82,23 +115,50 @@ def update_matches():
                 if kickoff_dt.tzinfo is None:
                     kickoff_dt = kickoff_dt.replace(tzinfo=timezone.utc)
                 if kickoff_dt <= now_utc:
+                    skipped_kickoff += 1
                     continue
             except (ValueError, TypeError):
                 pass  # keep fixture if we can't parse the time
 
         matches.append({
-            "home": m["teams"]["home"]["name"],
-            "away": m["teams"]["away"]["name"],
-            "league": allowed_leagues[league_id],
-            "date": today,
+            "home":       m["teams"]["home"]["name"],
+            "away":       m["teams"]["away"]["name"],
+            "league":     allowed_leagues[league_id],
+            "date":       today,
             "kickoff_utc": kickoff_str,
-            "status": status_short,
+            "status":     status_short,
+            "round":      m["league"].get("round", ""),
+            "tournament": m["league"].get("name", ""),
         })
+
+    logger.info(
+        "update_matches: of %d fixture(s) — %d filtered by league, %d by status, "
+        "%d by past kickoff, %d ready to write",
+        total_from_api, skipped_league, skipped_status, skipped_kickoff, len(matches),
+    )
+
+    if not matches:
+        if total_from_api == 0:
+            logger.warning(
+                "update_matches: API returned 0 fixtures for %s "
+                "(no games scheduled or API key exhausted)",
+                today,
+            )
+        else:
+            logger.warning(
+                "update_matches: 0 valid matches for %s after filtering — "
+                "existing CSV NOT overwritten "
+                "(%d fixture(s) returned but %d filtered by league, "
+                "%d by status, %d by past kickoff)",
+                today, total_from_api, skipped_league, skipped_status, skipped_kickoff,
+            )
+        return
 
     os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
 
     with open(DATA_PATH, "w", newline="", encoding="utf-8") as csvfile:
-        fieldnames = ["home", "away", "league", "date", "kickoff_utc", "status"]
+        fieldnames = ["home", "away", "league", "date", "kickoff_utc", "status",
+                      "round", "tournament"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
         writer.writeheader()
         for m in matches:

@@ -114,9 +114,47 @@ LEAGUE_IDS = {
 
 ALLOWED_LEAGUE_IDS = {
     262: "Liga MX",
-    39: "Premier League",
+    39:  "Premier League",
     140: "La Liga",
-    2: "Champions League",
+    2:   "Champions League",
+    135: "Serie A",
+    78:  "Bundesliga",
+    # ── Knockout / cup tournaments ──────────────────────────────────────────
+    3:    "UEFA Europa League",
+    848:  "UEFA Europa Conference League",
+    1:    "FIFA World Cup",
+    143:  "Copa del Rey",
+    137:  "Coppa Italia",
+    65:   "Coupe de France",
+    45:   "FA Cup",
+    48:   "EFL Cup",
+    81:   "DFB-Pokal",
+    769:  "Leagues Cup",
+    9:    "Copa América",
+    25:   "Gold Cup",
+    26:   "CONCACAF Nations League",
+    531:  "UEFA Super Cup",
+    34:   "Copa Libertadores",
+    13:   "Copa Sudamericana",
+    436:  "Club World Cup",
+    667:  "FIFA Club World Cup",
+    17:   "Copa MX",
+    10:   "FIFA World Cup Qualification",
+    # ── Qualification / classification competitions ──────────────────────────
+    32:   "World Cup Qualification - Europe",
+    29:   "World Cup Qualification - CONMEBOL",
+    31:   "World Cup Qualification - CONCACAF",
+    30:   "World Cup Qualification - CAF",
+    33:   "World Cup Qualification - AFC",
+    41:   "World Cup Qualification - OFC",
+    4:    "UEFA Euro Championship",
+    960:  "UEFA Euro Qualification",
+    5:    "UEFA Nations League",
+    8:    "UEFA Champions League Qualifying",
+    847:  "UEFA Conference League Qualifying",
+    176:  "Copa América Qualification",
+    622:  "CAF Champions League",
+    20:   "AFC Champions League",
 }
 
 # ===============================
@@ -279,11 +317,43 @@ def detect_league(home_team: str, away_team: str) -> str:
 
 
 def validate_config() -> bool:
-    """Validate that required environment variables are set."""
+    """Validate that required environment variables are set and log API key status."""
     ok = True
     if not TELEGRAM_TOKEN:
         logger.error("TOKEN environment variable is not set")
         ok = False
-    if not API_SPORTS_KEY:
-        logger.warning("API_SPORTS_KEY environment variable is not set – live match updates disabled")
+
+    # Report optional API key status so Railway logs make it clear what's available
+    if API_SPORTS_KEY:
+        logger.info("API_SPORTS_KEY: configured ✓ (live soccer fixtures enabled)")
+    else:
+        logger.warning(
+            "API_SPORTS_KEY: NOT set — live soccer match updates disabled. "
+            "Set this in Railway to get today's real fixtures."
+        )
+
+    if SPORTRADAR_API_KEY:
+        logger.info(
+            "SPORTRADAR_API_KEY: configured ✓ (access level: %s)",
+            SPORTRADAR_ACCESS or "production",
+        )
+    else:
+        logger.info(
+            "SPORTRADAR_API_KEY: not set (optional — ESPN stats used instead)"
+        )
+
+    if ODDS_API_KEY:
+        logger.info("ODDS_API_KEY: configured ✓ (auto-scanner will use live odds)")
+    else:
+        logger.info(
+            "ODDS_API_KEY: not set (optional — auto-scanner uses model-based odds)"
+        )
+
+    if ALERTS_CHANNEL_ID:
+        logger.info("ALERTS_CHANNEL_ID: configured ✓ (%s)", ALERTS_CHANNEL_ID)
+    else:
+        logger.info(
+            "ALERTS_CHANNEL_ID: not set (optional — daily alerts sent to subscribers only)"
+        )
+
     return ok
