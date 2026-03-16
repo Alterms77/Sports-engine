@@ -596,7 +596,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  `/scanner` · `/addmarket` · `/clearmarkets`\n\n"
         "📡 *Datos en vivo (SofaScore / TheSportsDB / ESPN)*\n"
         "  `/live [deporte]` · `/scores` · `/liveteam EQUIPO` · `/tabla LIGA`\n\n"
-        "📅 `/today` — partidos de hoy\n"
+        "📅 `/today` — partidos de hoy (todos los deportes)\n"
+        "  `/today futbol` · `/today nba` · `/today nfl` · `/today mlb` · `/today tenis`\n"
         "❓ `/help` — ayuda detallada\n"
         "🎛 `/menu` — menú con botones",
         parse_mode="Markdown",
@@ -712,52 +713,188 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show today's football matches (local CSV) + live ESPN schedule for all sports."""
-    # ── Refresh CSV if stale (TTL = 15 min), non-blocking ──
-    _refresh_matches_if_stale()
+    """Show today's schedule, optionally filtered by sport.
 
-    # ── Local football matches ──
-    football_matches = load_today_matches()
+    Usage:
+        /today            — all sports
+        /today futbol     — ⚽ Fútbol only
+        /today nba        — 🏀 NBA only
+        /today nfl        — 🏈 NFL only
+        /today mlb        — ⚾ MLB only
+        /today tenis      — 🎾 Tenis only
+    """
+    # ── Parse optional sport filter ────────────────────────────────────────
+    arg = (" ".join(context.args)).strip().lower() if context.args else ""
 
-    text = "📅 *Partidos de hoy*\n\n"
+    # Normalize aliases → canonical key
+    _SPORT_MAP = {
+        "futbol": "soccer", "fútbol": "soccer", "football": "soccer",
+        "soccer": "soccer",
+        "nba": "nba",
+        "nfl": "nfl",
+        "mlb": "mlb",
+        "beisbol": "mlb", "béisbol": "mlb", "baseball": "mlb",
+        "tenis": "tennis", "tennis": "tennis",
+    }
+    sport_filter = _SPORT_MAP.get(arg, None)  # None means "all"
 
-    if football_matches:
-        text += "⚽ *Fútbol*\n"
+    # ── Always force a fresh CSV refresh for soccer ─────────────────────────
+    global _last_csv_update
+    if sport_filter in (None, "soccer"):
+        if not _matches_lock.acquire(blocking=False):
+            pass  # Another thread is refreshing; use cached data
+        else:
+            try:
+                update_matches()
+                _last_csv_update = _time.time()
+            except Exception as exc:
+                logger.warning("today: error al actualizar partidos: %s", exc)
+            finally:
+                _matches_lock.release()
+
+    # ── Bust the ESPN in-process cache so statuses are fresh ───────────────
+    if sport_filter in (None, "nba", "nfl", "mlb", "tennis"):
+        try:
+            from api.espn_api import clear_cache
+            clear_cache()
+        except Exception:
+            pass
+
+    # ── Build sport-filtered update timestamp line ──────────────────────────
+    ts_str = ""
+    if _last_csv_update:
+        ts_str = datetime.fromtimestamp(_last_csv_update).strftime("%H:%M")
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Helper: build a single-sport block and send it as its own message so
+    # we never exceed Telegram's 4096-char message limit.
+    # ──────────────────────────────────────────────────────────────────────
+    async def _send_soccer():
+        football_matches = load_today_matches()
+        if not football_matches:
+            await update.message.reply_text(
+                "⚽ *Fútbol* — Sin partidos disponibles para hoy.",
+                parse_mode="Markdown",
+            )
+            return
+        lines = [f"⚽ *Fútbol — Partidos de hoy*"]
+        if ts_str:
+            lines.append(f"_Actualizado: {ts_str}_")
+        lines.append("")
         for m in football_matches:
-            league = f" _{m['league']}_" if m["league"] else ""
-            text += f"  • {m['home']} vs {m['away']}{league}\n"
-        # Show last update timestamp for the CSV
-        if _last_csv_update:
-            ts = datetime.fromtimestamp(_last_csv_update).strftime("%H:%M")
-            text += f"_Actualizado: {ts}_\n"
-        text += "\n"
+            league = f" _{m['league']}_" if m.get("league") else ""
+            lines.append(f"  • {m['home']} vs {m['away']}{league}")
+        # Split into chunks of 50 matches to avoid Telegram limits
+        chunk: list[str] = []
+        header = lines[:3]  # title + timestamp + blank
+        body   = lines[3:]
+        for i, line in enumerate(body):
+            chunk.append(line)
+            if len(chunk) >= 50:
+                await update.message.reply_text(
+                    "\n".join(header + chunk), parse_mode="Markdown"
+                )
+                chunk = []
+                header = []  # header only on first chunk
+        if chunk or not body:
+            await update.message.reply_text(
+                "\n".join(header + chunk) if chunk else "\n".join(header),
+                parse_mode="Markdown",
+            )
 
-    # ── ESPN multi-sport schedule ──
-    try:
-        espn_games = get_all_scoreboards()
-        by_sport: dict = {}
-        for g in espn_games:
-            by_sport.setdefault(g["sport"], []).append(g)
+    async def _send_espn_sport(espn_key: str, emoji: str, label: str):
+        try:
+            from api.espn_api import get_scoreboard
+            games = get_scoreboard(espn_key)
+        except Exception as exc:
+            logger.warning("ESPN %s unavailable: %s", espn_key, exc)
+            await update.message.reply_text(
+                f"{emoji} *{label}* — Sin datos disponibles ahora.",
+                parse_mode="Markdown",
+            )
+            return
+        if not games:
+            await update.message.reply_text(
+                f"{emoji} *{label}* — Sin partidos disponibles para hoy.",
+                parse_mode="Markdown",
+            )
+            return
+        lines = [f"{emoji} *{label} — Partidos de hoy*", ""]
+        for g in games:
+            score = (
+                f" `{g['home_score']}-{g['away_score']}`"
+                if g.get("home_score") and g.get("away_score")
+                else ""
+            )
+            status = (
+                f" _{g['status']}_"
+                if g.get("status") and g["status"] not in ("Scheduled", "Pregame", "Pre-Game")
+                else ""
+            )
+            lines.append(f"  • {g['home']} vs {g['away']}{score}{status}")
+        await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
-        sport_emojis = {"NBA": "🏀", "NFL": "🏈", "MLB": "⚾", "ATP": "🎾"}
-        for sport, games in by_sport.items():
-            emoji = sport_emojis.get(sport, "🏟️")
-            text += f"{emoji} *{sport}*\n"
-            for g in games[:8]:  # cap at 8 per sport
-                score = f" `{g['home_score']}-{g['away_score']}`" if g.get("home_score") and g.get("away_score") else ""
-                status = f" _{g['status']}_" if g.get("status") and g["status"] != "Scheduled" else ""
-                text += f"  • {g['home']} vs {g['away']}{score}{status}\n"
-            text += "\n"
-    except Exception as exc:
-        logger.warning("ESPN scoreboard unavailable: %s", exc)
+    # ── Dispatch based on filter ────────────────────────────────────────────
+    if sport_filter == "soccer":
+        await _send_soccer()
+    elif sport_filter == "nba":
+        await _send_espn_sport("nba", "🏀", "NBA")
+    elif sport_filter == "nfl":
+        await _send_espn_sport("nfl", "🏈", "NFL")
+    elif sport_filter == "mlb":
+        await _send_espn_sport("mlb", "⚾", "MLB")
+    elif sport_filter == "tennis":
+        await _send_espn_sport("atp", "🎾", "Tenis ATP")
+    else:
+        # ── No filter: send header + each sport as separate message ─────────
+        await update.message.reply_text(
+            "📅 *Partidos de hoy — todos los deportes*\n"
+            "_Usa `/today futbol`, `/today nba`, `/today nfl`, `/today mlb` "
+            "o `/today tenis` para filtrar._",
+            parse_mode="Markdown",
+        )
+        await _send_soccer()
+        for espn_key, emoji, label in [
+            ("nba", "🏀", "NBA"),
+            ("nfl", "🏈", "NFL"),
+            ("mlb", "⚾", "MLB"),
+            ("atp", "🎾", "Tenis ATP"),
+        ]:
+            await _send_espn_sport(espn_key, emoji, label)
 
-    if not football_matches and not text.strip().endswith("*\n"):
-        text += "📭 No hay partidos disponibles.\n\nUsa `/sports` para ver todos los comandos."
 
-    await update.message.reply_text(text, parse_mode="Markdown")
+# ── Sport-specific today wrappers (used by menu buttons) ─────────────────────
+
+async def today_futbol(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """⚽ /today futbol — Soccer matches only."""
+    context.args = ["futbol"]
+    await today(update, context)
 
 
-async def predict(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def today_nba(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🏀 /today nba — NBA schedule only."""
+    context.args = ["nba"]
+    await today(update, context)
+
+
+async def today_nfl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🏈 /today nfl — NFL schedule only."""
+    context.args = ["nfl"]
+    await today(update, context)
+
+
+async def today_mlb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """⚾ /today mlb — MLB schedule only."""
+    context.args = ["mlb"]
+    await today(update, context)
+
+
+async def today_tenis(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🎾 /today tenis — Tennis schedule only."""
+    context.args = ["tenis"]
+    await today(update, context)
+
+
     if not context.args:
         await update.message.reply_text(
             "❌ Uso incorrecto.\n\nFormato:\n`/predict LOCAL vs VISITANTE`",
@@ -1129,7 +1266,8 @@ async def sports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  `/scores [deporte]` — partidos de hoy\n"
         "  `/liveteam EQUIPO` — forma + próximos partidos\n"
         "  `/tabla LIGA` — clasificación\n\n"
-        "📅 `/today` — agenda multideporte\n"
+        "📅 `/today` — agenda multideporte (todos los deportes)\n"
+        "  `/today futbol` · `/today nba` · `/today nfl` · `/today mlb` · `/today tenis`\n"
         "❓ `/help` — ayuda detallada\n\n"
         "_Props basados en promedios de liga escalados al rendimiento del equipo._\n"
         "_Fuentes: SofaScore · TheSportsDB · ESPN_",
@@ -3323,10 +3461,17 @@ _MENU_SECTIONS = [
     ("🌙 Parlay Soñador", "cmd_parlay_dream"),
     ("📸 Check Parlay",  "cmd_checkparlay"),
 
+    ("── 📅 TODAY ──", None),
+    ("⚽ Fútbol Hoy",  "cmd_today_futbol"),
+    ("🏀 NBA Hoy",     "cmd_today_nba"),
+    ("🏈 NFL Hoy",     "cmd_today_nfl"),
+    ("⚾ MLB Hoy",     "cmd_today_mlb"),
+    ("🎾 Tenis Hoy",   "cmd_today_tenis"),
+    ("📅 Todo Hoy",    "cmd_today"),
+
     ("── 📊 ESTADÍSTICAS ──", None),
     ("📊 Estadísticas",  "cmd_estadisticas"),
     ("📈 Historial",     "cmd_historial"),
-    ("📅 Today",         "cmd_today"),
 
     ("── 🛰 SCANNER ──", None),
     ("🛰 Autoscan",  "cmd_autoscan"),
@@ -3352,6 +3497,11 @@ _MENU_DISPATCH: dict[str, str] = {
     "cmd_estadisticas": "estadisticas_command",
     "cmd_historial":    "historial_command",
     "cmd_today":        "today",
+    "cmd_today_futbol": "today_futbol",
+    "cmd_today_nba":    "today_nba",
+    "cmd_today_nfl":    "today_nfl",
+    "cmd_today_mlb":    "today_mlb",
+    "cmd_today_tenis":  "today_tenis",
     "cmd_autoscan":     "autoscan_command",
     "cmd_scanner":      "scanner_command",
     "cmd_live":         "live",
@@ -3501,7 +3651,12 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu",  menu_command))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("today", today))
+    app.add_handler(CommandHandler("today",        today))
+    app.add_handler(CommandHandler("today_futbol", today_futbol))
+    app.add_handler(CommandHandler("today_nba",    today_nba))
+    app.add_handler(CommandHandler("today_nfl",    today_nfl))
+    app.add_handler(CommandHandler("today_mlb",    today_mlb))
+    app.add_handler(CommandHandler("today_tenis",  today_tenis))
     app.add_handler(CommandHandler("predict", predict))
     app.add_handler(CommandHandler("value", value))
     app.add_handler(CommandHandler("stats", stats))
