@@ -299,6 +299,61 @@ def format_prediction(pred: dict) -> str:
         "",
     ]
 
+    # ── Shot metrics block (§6 of the shot analytics spec) ──
+    _shot_ctx = pred.get("shot_metrics", {})
+    if _shot_ctx:
+        _sh = _shot_ctx.get("home", {})
+        _sa = _shot_ctx.get("away", {})
+        _proj = _shot_ctx.get("projection", {})
+
+        _sh_tot  = _sh.get("total_shots",     0.0)
+        _sa_tot  = _sa.get("total_shots",     0.0)
+        _sh_sot  = _sh.get("shots_on_target", 0.0)
+        _sa_sot  = _sa.get("shots_on_target", 0.0)
+        _sh_acc  = _sh.get("shot_accuracy",   0.0)
+        _sa_acc  = _sa.get("shot_accuracy",   0.0)
+        _sh_dom  = _sh.get("shot_dominance",  0.5)
+        _sa_dom  = _sa.get("shot_dominance",  0.5)
+        _h_proj  = _proj.get("home_projected", 0.0)
+        _a_proj  = _proj.get("away_projected", 0.0)
+
+        lines += [
+            "👁 *TIROS*",
+            "━━━━━━━━━━━━━━━━━━━━",
+            f"  Tiros Totales   {home1}: `{_sh_tot:.1f}` ─── `{_sa_tot:.1f}` :{away1}",
+            f"  Tiros a Puerta  {home1}: `{_sh_sot:.1f}` ─── `{_sa_sot:.1f}` :{away1}",
+            f"  Precisión       {home1}: `{_sh_acc*100:.0f}%` ─── `{_sa_acc*100:.0f}%` :{away1}",
+            f"  Dominio Tiros   {home1}: `{_sh_dom*100:.0f}%`  /  {away1}: `{_sa_dom*100:.0f}%`",
+        ]
+
+        if _h_proj > 0 or _a_proj > 0:
+            lines.append(
+                f"  Proyección      {home1}: `{_h_proj:.1f}` ─── `{_a_proj:.1f}` :{away1}"
+            )
+
+        # Shot quality / threat rate (only when meaningful)
+        _sh_qual = _sh.get("shot_quality", 0.0)
+        _sa_qual = _sa.get("shot_quality", 0.0)
+        if _sh_qual > 0 or _sa_qual > 0:
+            lines.append(
+                f"  Cal. Disparo    {home1}: `{_sh_qual:.3f}` ─── `{_sa_qual:.3f}` :{away1}"
+            )
+
+        # Adjustment reasons (inform the user when shots changed probs)
+        _adj_reasons = (_shot_ctx.get("adjusted_probs") or {}).get("shot_adjustment_reasons", [])
+        if _adj_reasons:
+            lines.append(f"  ⚡ Ajuste: `{', '.join(_adj_reasons)}`")
+
+        lines.append("")
+
+        # Shot-based auto-picks (§7 value detection)
+        _shot_picks = _shot_ctx.get("shot_picks", [])
+        if _shot_picks:
+            lines += ["🎯 *PICKS POR TIROS*", "━━━━━━━━━━━━━━━━━━━━"]
+            for _sp in _shot_picks[:4]:   # cap at 4 to avoid clutter
+                lines.append(f"  ✅ {_sp['pick']}  _{_sp['reason']}_")
+            lines.append("")
+
     # ── Probabilities with visual bars ──
     hw = pred.get("home_win", 0)
     dr = pred.get("draw", 0)
@@ -1466,8 +1521,11 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ── Build parlays: only ALTA confidence, ≥ 75 % probability ──────────
-    from core.parlay import generate_parlay_legs, build_parlays, format_parlay
+    # ── Build parlays: only ALTA confidence, ≥ 68 % probability ──────────
+    from core.parlay import (
+        generate_parlay_legs, build_parlays, format_parlay,
+        MIN_CONF_DEFAULT, MIN_PROB_DEFAULT, _md_escape,
+    )
     from core.parlay_history import save_parlay as _save_parlay, get_calibration_stats
 
     # Pre-load calibration stats once so generate_parlay_legs doesn't query DB per leg
@@ -1476,20 +1534,42 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         cal_stats = {}
 
-    legs, report, _excluded = generate_parlay_legs(
+    legs, report, excluded = generate_parlay_legs(
         predictions,
-        min_confidence="MEDIA",
-        min_prob=65.0,
+        min_confidence=MIN_CONF_DEFAULT,
+        min_prob=MIN_PROB_DEFAULT,
         cal_stats=cal_stats,
     )
 
     if len(legs) < 2:
         total = report.get("total_candidates", len(predictions))
         excl  = report.get("exclusions", {})
-        excl_str = ", ".join(f"{k}={v}" for k, v in sorted(excl.items())) if excl else "ninguno"
+        excl_str = ", ".join(
+            f"{k}={v}" for k, v in sorted(excl.items(), key=lambda x: -x[1])
+        ) if excl else "ninguno"
+
+        # Show top near-miss picks so the user understands the quality bar
+        near_misses = sorted(
+            [e for e in excluded if e.get("p_best_raw", 0) >= 60],
+            key=lambda x: x.get("p_best_raw", 0),
+            reverse=True,
+        )[:3]
+        near_miss_lines = []
+        for nm in near_misses:
+            reasons_short = ", ".join(nm.get("reasons", [])[:2])
+            near_miss_lines.append(
+                f"  • {_md_escape(nm.get('event_name', 'Partido'))} "
+                f"({nm.get('p_best_raw', 0):.0f}%) — _{reasons_short}_"
+            )
+        near_miss_text = (
+            "\n\n*Picks casi incluidos:*\n" + "\n".join(near_miss_lines)
+            if near_miss_lines else ""
+        )
+
         await update.message.reply_text(
             "⚠️ No hay suficientes picks de alta confianza para armar un parlay hoy.\n"
-            f"_(Analizados: {total} | Excluidos: {excl_str})_",
+            f"_(Analizados: {total} | Excluidos por: {excl_str})_"
+            f"{near_miss_text}",
             parse_mode="Markdown",
         )
         return
@@ -1519,7 +1599,11 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parlay_id=parlay_id,
         report=report,
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    try:
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as exc:
+        logger.warning("parlay_command: Markdown parse failed (%s), retrying plain", exc)
+        await update.message.reply_text(text)
 
 
 async def parlay_safe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1594,7 +1678,81 @@ async def parlay_safe_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.warning("parlay_safe_command: could not save to history: %s", exc)
 
     text = format_parlay_safe(legs, report, parlay_id=parlay_id)
-    await update.message.reply_text(text, parse_mode="Markdown")
+    try:
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as exc:
+        logger.warning("parlay_safe_command: Markdown parse failed (%s), retrying plain", exc)
+        await update.message.reply_text(text)
+
+
+async def parlay_dream_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /parlay_dream  (alias: /parlay_sonador)
+
+    Generate a high-risk, high-reward "dream parlay" that covers multiple
+    correlated picks per match across all available sports.  Each bundle tells
+    a coherent story — lower probability but more exciting.
+    """
+    await update.message.reply_text(
+        "🌙 Generando Parlay Soñador…",
+        parse_mode="Markdown",
+    )
+
+    # ── Refresh soccer CSV if stale ────────────────────────────────────────
+    _refresh_matches_if_stale()
+
+    # ── Load today's matches; ESPN may already include tomorrow's games ──────
+    matches = load_today_matches_multisport()
+    if not matches:
+        await update.message.reply_text(
+            "❌ No hay partidos disponibles para hoy.\nUsa `/today` para verificar o intenta más tarde.",
+            parse_mode="Markdown",
+        )
+        return
+
+    # ── Run predictions concurrently with per-match 15 s timeout ─────────
+    semaphore = _asyncio.Semaphore(5)
+    preds = await _asyncio.gather(
+        *[_predict_one(m, semaphore) for m in matches],
+        return_exceptions=False,
+    )
+    predictions = [p for p in preds if p is not None]
+
+    if not predictions:
+        await update.message.reply_text(
+            "❌ No se pudieron generar predicciones para los partidos de hoy."
+        )
+        return
+
+    from core.parlay import generate_dream_parlay, format_parlay_dream
+    from core.parlay_history import save_parlay as _save_parlay
+
+    bundles = generate_dream_parlay(predictions, max_bundles=4)
+
+    # ── Save to history ────────────────────────────────────────────────────
+    parlay_id = ""
+    if bundles:
+        try:
+            all_legs = [leg for b in bundles for leg in b["legs"]]
+            # Annotate legs with match info for history storage
+            for bundle in bundles:
+                for leg in bundle["legs"]:
+                    leg.setdefault("match", bundle["match"])
+                    leg.setdefault("sport", bundle["sport"])
+                    leg.setdefault("sport_emoji", bundle["sport_emoji"])
+            combined = 1.0
+            for b in bundles:
+                combined *= b["bundle_prob"] / 100.0
+            parlay_id = _save_parlay(all_legs, "dream", round(combined * 100, 1))
+        except Exception as exc:
+            logger.warning("parlay_dream_command: could not save to history: %s", exc)
+
+    text = format_parlay_dream(bundles, parlay_id=parlay_id)
+    try:
+        await update.message.reply_text(text, parse_mode="Markdown")
+    except Exception as exc:
+        logger.warning("parlay_dream_command: Markdown parse failed (%s), retrying plain", exc)
+        await update.message.reply_text(text)
 
 
 # ── Parlay photo / text analyzer ─────────────────────────────────────────────
@@ -3067,6 +3225,7 @@ _MENU_SECTIONS = [
     ("── 🎰 PARLAYS ──", None),
     ("🎰 Parlay",        "cmd_parlay"),
     ("🛡 Parlay Safe",   "cmd_parlay_safe"),
+    ("🌙 Parlay Soñador", "cmd_parlay_dream"),
     ("📸 Check Parlay",  "cmd_checkparlay"),
 
     ("── 📊 ESTADÍSTICAS ──", None),
@@ -3093,6 +3252,7 @@ _MENU_DISPATCH: dict[str, str] = {
     "cmd_tennis":       "tennis",
     "cmd_parlay":       "parlay_command",
     "cmd_parlay_safe":  "parlay_safe_command",
+    "cmd_parlay_dream": "parlay_dream_command",
     "cmd_checkparlay":  "checkparlay_command",
     "cmd_estadisticas": "estadisticas_command",
     "cmd_historial":    "historial_command",
@@ -3252,6 +3412,8 @@ def main():
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("parlay",       parlay_command))
     app.add_handler(CommandHandler("parlay_safe",  parlay_safe_command))
+    app.add_handler(CommandHandler("parlay_dream",   parlay_dream_command))
+    app.add_handler(CommandHandler("parlay_sonador", parlay_dream_command))
 
     # ── Parlay photo analyzer, text checker, result recorder, history ──
     app.add_handler(CommandHandler("checkparlay",   checkparlay_command))

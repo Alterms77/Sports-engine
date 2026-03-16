@@ -37,17 +37,44 @@ from __future__ import annotations
 import math
 from typing import Optional
 
+
+def _md_escape(text: str) -> str:
+    """Escape underscores so Telegram Markdown doesn't treat them as italic markers."""
+    return str(text).replace("_", r"\_")
+
 _CONFIDENCE_RANK = {"ALTA": 2, "MEDIA": 1, "BAJA": 0}
 
 # Maximum legs of the same market type allowed (default mode)
 _MAX_SAME_MARKET = 2
 
 # ── Risk thresholds (0-1 scale) ────────────────────────────────────────────────
-RISK_THRESHOLD_DEFAULT = 0.45   # default /parlay (raised from 0.35 to allow more picks)
+RISK_THRESHOLD_DEFAULT = 0.40   # tightened from 0.45 to improve hit rate
 RISK_THRESHOLD_SAFE    = 0.25   # /parlay_safe (more conservative)
 
 # Keep legacy name for test compatibility
 _HIGH_RISK_SCORE = RISK_THRESHOLD_DEFAULT
+
+# ── Default parlay quality thresholds ────────────────────────────────────────
+# These are used by generate_parlay_legs() default arguments and by bot.py.
+# Raising these from their previous values (min_prob=65, MEDIA confidence)
+# improves hit rate by excluding borderline picks.
+MIN_PROB_DEFAULT    = 68.0    # minimum calibrated probability for default /parlay
+MIN_CONF_DEFAULT    = "ALTA"  # minimum confidence for default /parlay
+
+# ── Form-streak risk penalty ──────────────────────────────────────────────────
+# When the model picks a team to win but that team is on a notable losing streak,
+# the pick is higher-risk than the raw probability suggests.  These constants
+# control the penalty added to the risk score.
+_FORM_STREAK_LOSS_SHORT  = 3   # streak length triggering a mild penalty
+_FORM_STREAK_LOSS_LONG   = 5   # streak length triggering a stronger penalty
+_FORM_STREAK_PENALTY_MID = 0.10   # penalty for ≥3-game losing streak
+_FORM_STREAK_PENALTY_HIGH = 0.18  # penalty for ≥5-game losing streak
+
+# ── Overconfidence calibration risk boost ─────────────────────────────────────
+# If a market type has historically been overconfident (calibration factor < this
+# threshold), add a small risk penalty so the leg is held to a higher standard.
+_CAL_OVERCONF_THRESHOLD = 0.85  # calibration factor below which we add risk
+_CAL_OVERCONF_PENALTY   = 0.05  # extra risk for consistently overconfident markets
 
 # ── Calibration floor ─────────────────────────────────────────────────────────
 # Maximum downward adjustment allowed per calibration step (percentage points).
@@ -102,6 +129,77 @@ def _sport_key(pred: dict) -> str:
     return "soccer"
 
 
+def _get_streak(pred: dict, side: str) -> dict:
+    """
+    Extract streak info for *side* ('home' or 'away') from a prediction dict.
+
+    Soccer predictions include ``form_home`` / ``form_away`` dicts with a
+    nested ``streak`` sub-dict (``{"type": "W"/"L"/"D", "length": int}``)
+    populated by ``core.form.current_streak()``.
+
+    For non-soccer sports the field is absent and we return an empty dict.
+    """
+    key = f"form_{side}"
+    form = pred.get(key, {})
+    if isinstance(form, dict):
+        return form.get("streak", {}) or {}
+    return {}
+
+
+def _form_fade_penalty(pred: dict) -> tuple[float, list]:
+    """
+    Return an extra risk penalty when the model's moneyline pick contradicts
+    the team's recent form (a "form fade" situation).
+
+    Logic:
+    - Determine which side the model favours (higher home_win vs away_win).
+    - Read that side's current streak from ``form_home`` / ``form_away``.
+    - If the favoured side is on a losing streak ≥ ``_FORM_STREAK_LOSS_SHORT``
+      games, add a graduated penalty.
+    - Also flag an opposing hot streak (≥3 W) as a secondary risk indicator.
+
+    Returns (penalty: float, reasons: list[str])
+    """
+    hw = float(pred.get("home_win") or 0.0)
+    aw = float(pred.get("away_win") or 0.0)
+
+    if hw <= 0.0 and aw <= 0.0:
+        return 0.0, []
+
+    if hw >= aw:
+        fav_side, opp_side = "home", "away"
+    else:
+        fav_side, opp_side = "away", "home"
+
+    fav_streak = _get_streak(pred, fav_side)
+    opp_streak = _get_streak(pred, opp_side)
+
+    penalty = 0.0
+    reasons: list = []
+
+    fav_type   = fav_streak.get("type", "")
+    fav_length = int(fav_streak.get("length", 0))
+
+    # Penalise when the model's pick is on a sustained losing run
+    if fav_type == "L":
+        if fav_length >= _FORM_STREAK_LOSS_LONG:
+            penalty += _FORM_STREAK_PENALTY_HIGH
+            reasons.append("FORM_FADE")
+        elif fav_length >= _FORM_STREAK_LOSS_SHORT:
+            penalty += _FORM_STREAK_PENALTY_MID
+            reasons.append("FORM_FADE")
+
+    # Secondary: opponent on a hot winning streak — harder to beat
+    opp_type   = opp_streak.get("type", "")
+    opp_length = int(opp_streak.get("length", 0))
+    if opp_type == "W" and opp_length >= _FORM_STREAK_LOSS_SHORT:
+        penalty += _FORM_STREAK_PENALTY_MID * 0.5   # half-weight secondary signal
+        if "FORM_FADE" not in reasons:
+            reasons.append("FORM_FADE")
+
+    return penalty, reasons
+
+
 # ── Per-sport risk scoring ────────────────────────────────────────────────────
 
 def score_risk_soccer(pred: dict) -> tuple:
@@ -119,6 +217,7 @@ def score_risk_soccer(pred: dict) -> tuple:
       * No live data source: missing data flag
       * No market with strong probability (< 65 %): LOW_PROB
       * Very close draw probability (p_draw ≥ 30 % and < p_best + 10): COIN_FLIP
+      * Favoured team on a recent losing streak: FORM_FADE
 
     Circumstantial "soft" penalties (SHARP, NO_LIVE_DATA, LOW_CONF, LOW_PROB,
     draw COIN_FLIP) are each capped at 0.25 to prevent over-stacking from
@@ -172,6 +271,14 @@ def score_risk_soccer(pred: dict) -> tuple:
         risk += min(0.15, _SOFT_CAP)
         reasons.append("COIN_FLIP")
 
+    # Form-fade: picked team on a losing streak contradicts the model
+    fade_penalty, fade_reasons = _form_fade_penalty(pred)
+    if fade_penalty > 0:
+        risk += min(fade_penalty, _SOFT_CAP)
+        for r in fade_reasons:
+            if r not in reasons:
+                reasons.append(r)
+
     return min(risk, 1.0), reasons
 
 
@@ -204,7 +311,7 @@ def score_risk_nba(pred: dict) -> tuple:
     top_side = max(hw, aw)
 
     # Graduated probability penalty — no duplicate: only one block fires
-    if top_side < 52.0:
+    if top_side < 54.0:
         risk += 0.35
         reasons.append("COIN_FLIP")
     elif top_side < 58.0:
@@ -253,7 +360,7 @@ def score_risk_nfl(pred: dict) -> tuple:
     top_side = max(hw, aw)
 
     # Graduated probability penalty — single block, no duplicate
-    if top_side < 52.0:
+    if top_side < 54.0:
         risk += 0.35
         reasons.append("COIN_FLIP")
     elif top_side < 58.0:
@@ -293,7 +400,7 @@ def score_risk_mlb(pred: dict) -> tuple:
     top_side = max(hw, aw)
 
     # Graduated probability penalty — single block, no duplicate
-    if top_side < 52.0:
+    if top_side < 54.0:
         risk += 0.35
         reasons.append("COIN_FLIP")
     elif top_side < 58.0:
@@ -576,8 +683,8 @@ def _passes_clarity(candidate: dict, pred: dict, safe_mode: bool) -> tuple:
 def generate_parlay_legs(
     predictions: list,
     max_legs: int = 5,
-    min_confidence: str = "MEDIA",
-    min_prob: float = 65.0,
+    min_confidence: str = MIN_CONF_DEFAULT,
+    min_prob: float = MIN_PROB_DEFAULT,
     safe_mode: bool = False,
     cal_stats: Optional[dict] = None,
 ) -> tuple:
@@ -589,7 +696,9 @@ def generate_parlay_legs(
     predictions    : list of prediction dicts (soccer, NBA, NFL, or MLB).
     max_legs       : maximum number of legs to return.
     min_confidence : minimum confidence level ("ALTA" or "MEDIA").
+                     Defaults to ``MIN_CONF_DEFAULT`` ("ALTA").
     min_prob       : minimum individual pick probability (%) after calibration.
+                     Defaults to ``MIN_PROB_DEFAULT`` (68.0).
     safe_mode      : if True, use conservative safe-mode filters (moneyline
                      only, clarity criterion, stricter risk threshold).
     cal_stats      : pre-loaded calibration stats dict.  If None the function
@@ -615,6 +724,14 @@ def generate_parlay_legs(
             cal_stats = get_calibration_stats()
         except Exception:
             cal_stats = {}
+
+    # ── Also load per-sport calibration stats (for overconfidence detection) ─
+    sport_cal_stats: dict = {}
+    try:
+        from core.parlay_history import get_sport_stats
+        sport_cal_stats = get_sport_stats()
+    except Exception:
+        pass
 
     risk_threshold = RISK_THRESHOLD_SAFE if safe_mode else RISK_THRESHOLD_DEFAULT
     allowed_markets = _SAFE_MODE_MARKETS if safe_mode else _DEFAULT_MODE_MARKETS
@@ -658,6 +775,18 @@ def generate_parlay_legs(
             continue
 
         risk_score, risk_reasons = score_risk(pred)
+
+        # ── Overconfidence calibration boost ──────────────────────────────
+        # If historical data shows this sport has been systematically
+        # overconfident (calibration factor < threshold), add a small risk
+        # penalty so overconfident markets face a higher bar.
+        sport_stats = sport_cal_stats.get(sport, {})
+        sport_cal_factor = sport_stats.get("calibration", 1.0) if sport_stats else 1.0
+        if sport_cal_factor < _CAL_OVERCONF_THRESHOLD and sport_stats.get("n", 0) >= 5:
+            risk_score = min(risk_score + _CAL_OVERCONF_PENALTY, 1.0)
+            if "OVERCONF_HISTORY" not in risk_reasons:
+                risk_reasons = list(risk_reasons) + ["OVERCONF_HISTORY"]
+
         if risk_score >= risk_threshold:
             _add_excl(match_str, sport, "", 0, 0, conf,
                       risk_score, risk_reasons or ["HIGH_RISK"])
@@ -872,9 +1001,11 @@ def format_parlay(
             sport_e = leg.get("sport_emoji", "")
             prefix  = f"{sport_e} " if sport_e else ""
             cal     = leg.get("calibration_note", "")
-            cal_tag = f" _↺{cal}_" if cal else ""
+            cal_tag = f" _↺{_md_escape(cal)}_" if cal else ""
+            match_s = _md_escape(leg['match'])
+            pick_s  = _md_escape(leg['pick'])
             lines.append(
-                f"  {num} {prefix}{leg['match']} → {leg['pick']} ({leg['prob']}%){cal_tag}"
+                f"  {num} {prefix}{match_s} → {pick_s} ({leg['prob']}%){cal_tag}"
             )
             if cal:
                 any_calibrated = True
@@ -907,12 +1038,273 @@ def format_parlay(
     if parlay_id:
         lines.append(f"🆔 ID: `{parlay_id}`")
         lines.append(
-            f"📝 _Reporta resultados: `/resultado {parlay_id} WLW`_"
+            f"📝 Reporta resultados: `/resultado {parlay_id} WLW`"
         )
         lines.append("_  (W=Ganó, L=Perdió, X=Cancelado — una letra por pata)_")
         lines.append("")
 
     lines.append("⚠️ _Las parlays son recreativas. Apuesta responsablemente._")
+    return "\n".join(lines)
+
+
+# ── Dream Parlay (Parlay Soñador) ─────────────────────────────────────────────
+
+def _soccer_narrative(home: str, away: str, winner: str | None, btts: bool, high_scoring: bool) -> str:
+    if winner == home:
+        if high_scoring and btts:
+            return f"🔥 {_md_escape(home)} arrasa en casa — goleada con ambos marcando"
+        if high_scoring:
+            return f"⚡ {_md_escape(home)} domina — noche goleadora en casa"
+        return f"💪 {_md_escape(home)} se lleva los 3 puntos en casa"
+    if winner == away:
+        if high_scoring and btts:
+            return f"🚀 {_md_escape(away)} de visita y marcando — partido abierto"
+        return f"🎯 {_md_escape(away)} sorprende fuera de casa"
+    return f"🤝 Se espera equilibrio — empate entre {_md_escape(home)} y {_md_escape(away)}"
+
+
+def _nba_narrative(home: str, away: str, winner: str | None, total: float) -> str:
+    if winner == home:
+        if total >= 220:
+            return f"💥 {_md_escape(home)} en casa y lluvia de puntos — noche explosiva"
+        return f"🏀 {_md_escape(home)} controla el ritmo en casa"
+    if winner == away:
+        return f"🌟 {_md_escape(away)} de visita — upset posible"
+    return f"🏀 {_md_escape(home)} vs {_md_escape(away)} — partido parejo"
+
+
+def _generic_narrative(home: str, away: str, winner: str | None) -> str:
+    if winner == home:
+        return f"💪 {_md_escape(home)} favorito en casa"
+    if winner == away:
+        return f"🎯 {_md_escape(away)} viene a llevarse la victoria"
+    return f"⚖️ {_md_escape(home)} vs {_md_escape(away)}"
+
+
+def _build_dream_bundle(pred: dict) -> dict | None:
+    """
+    Build a dream bundle for a single match.
+
+    Tries to select 2-3+ coherent picks from _build_candidates().
+    Returns a bundle dict or None if not enough markets are available.
+    """
+    home  = pred.get("home", "Local")
+    away  = pred.get("away", "Visitante")
+    sport = str(pred.get("sport", "soccer")).lower()
+
+    sport_emoji_map = {
+        "soccer": "⚽", "football": "⚽",
+        "nba": "🏀", "nfl": "🏈", "mlb": "⚾", "tennis": "🎾",
+    }
+    sport_emoji = pred.get("sport_emoji", "")
+    if not sport_emoji:
+        for key, emoji in sport_emoji_map.items():
+            if key in sport:
+                sport_emoji = emoji
+                break
+        else:
+            sport_emoji = "🎯"
+
+    candidates = _build_candidates(pred)
+
+    hw = float(pred.get("home_win") or 0.0)
+    aw = float(pred.get("away_win") or 0.0)
+    dr = float(pred.get("draw")     or 0.0)
+
+    # ── Determine the story direction ────────────────────────────────────────
+    if hw >= aw and hw >= dr and hw >= 52.0:
+        winner_direction = "home"
+        winner_name      = home
+        ml_pick = next((c for c in candidates if f"Victoria {home}" in c["pick"]), None)
+    elif aw > hw and aw >= dr and aw >= 52.0:
+        winner_direction = "away"
+        winner_name      = away
+        ml_pick = next((c for c in candidates if f"Victoria {away}" in c["pick"]), None)
+    elif dr >= 40.0:
+        winner_direction = "draw"
+        winner_name      = None
+        ml_pick = next((c for c in candidates if c["pick"] == "Empate"), None)
+    else:
+        # No clear direction — skip this match
+        return None
+
+    # ── Select coherent legs ──────────────────────────────────────────────────
+    is_soccer = (not sport) or any(k in sport for k in ("soccer", "football"))
+
+    selected: list[dict] = []
+    if ml_pick:
+        selected.append({**ml_pick})
+
+    if is_soccer:
+        o15  = float(pred.get("over_1_5") or 0.0)
+        o25  = float(pred.get("over_2_5") or 0.0)
+        btts = float(pred.get("btts")     or 0.0)
+
+        if winner_direction in ("home", "away"):
+            if o25 >= 50.0:
+                cand = next((c for c in candidates if c["pick"] == "Over 2.5"), None)
+                if cand:
+                    selected.append(cand)
+            elif o15 >= 60.0:
+                cand = next((c for c in candidates if c["pick"] == "Over 1.5"), None)
+                if cand:
+                    selected.append(cand)
+            if btts >= 50.0 and not any(c["pick"] == "Ambos Marcan (BTTS)" for c in selected):
+                cand = next((c for c in candidates if c["pick"] == "Ambos Marcan (BTTS)"), None)
+                if cand:
+                    selected.append(cand)
+        else:
+            # Draw story: prefer lower totals
+            if o15 >= 55.0:
+                cand = next((c for c in candidates if c["pick"] == "Over 1.5"), None)
+                if cand:
+                    selected.append(cand)
+
+        high_scoring = o25 >= 50.0
+        btts_story   = btts >= 50.0 and winner_direction != "draw"
+        narrative = _soccer_narrative(home, away, winner_name, btts_story, high_scoring)
+
+    elif "nba" in sport:
+        game_totals = pred.get("game_totals", {})
+        total_pts   = float(pred.get("over_under") or 0.0)
+        if game_totals and isinstance(game_totals, dict):
+            over_prob = float(game_totals.get("over_prob") or game_totals.get("over") or 0.0)
+            line      = float(game_totals.get("line") or total_pts or 220.5)
+            if over_prob >= 52.0:
+                selected.append({
+                    "pick": f"Over {line:.1f}",
+                    "prob": round(over_prob, 1),
+                    "market_type": "totals",
+                })
+        narrative = _nba_narrative(home, away, winner_name, total_pts)
+
+    elif "mlb" in sport:
+        run_line = pred.get("run_line", {})
+        if run_line and isinstance(run_line, dict):
+            cov = float(run_line.get("cover_prob") or 0.0)
+            fav = run_line.get("fav_side", "")
+            if cov >= 52.0 and fav:
+                rl_label = f"{home} -1.5" if fav == "home" else f"{away} -1.5"
+                selected.append({"pick": rl_label, "prob": round(cov, 1), "market_type": "spread"})
+        narrative = _generic_narrative(home, away, winner_name)
+
+    else:
+        narrative = _generic_narrative(home, away, winner_name)
+
+    # Need at least 2 picks to form a bundle
+    if len(selected) < 2:
+        return None
+
+    bundle_prob = 1.0
+    for leg in selected:
+        bundle_prob *= leg["prob"] / 100.0
+
+    return {
+        "match":        f"{home} vs {away}",
+        "sport":        sport,
+        "sport_emoji":  sport_emoji,
+        "narrative":    narrative,
+        "legs":         selected,
+        "bundle_prob":  round(bundle_prob * 100, 1),
+    }
+
+
+def generate_dream_parlay(predictions: list, max_bundles: int = 4) -> list:
+    """
+    Generate a high-risk, high-reward dream parlay.
+
+    Each bundle covers one match with 2-3+ correlated picks that tell a
+    coherent story.  Returns a list of bundle dicts (up to ``max_bundles``).
+
+    Bundle structure::
+
+        {
+            "match":       "Liverpool vs Man Utd",
+            "sport":       "soccer",
+            "sport_emoji": "⚽",
+            "narrative":   "🔥 Liverpool arrasa en casa...",
+            "legs":        [{"pick": str, "prob": float, "market_type": str}, ...],
+            "bundle_prob": 27.1,
+        }
+    """
+    def _certainty(pred: dict) -> float:
+        hw = float(pred.get("home_win") or 0.0)
+        aw = float(pred.get("away_win") or 0.0)
+        return max(hw, aw)
+
+    sorted_preds = sorted(predictions, key=_certainty, reverse=True)
+
+    bundles: list[dict] = []
+    for pred in sorted_preds:
+        if len(bundles) >= max_bundles:
+            break
+        bundle = _build_dream_bundle(pred)
+        if bundle is None:
+            continue
+        bundles.append(bundle)
+
+    return bundles
+
+
+def format_parlay_dream(bundles: list, parlay_id: str = "") -> str:
+    """
+    Format the /parlay_dream output for Telegram.
+
+    All user-supplied text (team names) is escaped so Telegram Markdown never
+    trips on underscores or other special characters.
+    """
+    lines = [
+        "╔══════════════════════════════════╗",
+        "  🌙 PARLAY SOÑADOR — Sports Engine",
+        "╚══════════════════════════════════╝",
+        "",
+        "💭 _El parlay de los sueños — alto riesgo, alta recompensa._",
+        "_Cada partido cuenta una historia. ¿Se hará realidad?_",
+        "",
+    ]
+
+    _numbers = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"]
+
+    if not bundles:
+        lines.append("⚠️ _No hay suficientes partidos con mercados coherentes hoy._")
+        lines.append("_Intenta mañana o usa `/parlay` para opciones estándar._")
+        lines.append("")
+    else:
+        total_legs    = 0
+        combined_prob = 1.0
+
+        for bundle in bundles:
+            lines.append("━━━━━━━━━━━━━━━━━━━━")
+            sport_emoji = bundle.get("sport_emoji", "🎯")
+            match_s     = _md_escape(bundle["match"])
+            lines.append(f"{sport_emoji} *{match_s}*")
+            lines.append(bundle["narrative"])
+            lines.append("")
+            for j, leg in enumerate(bundle["legs"]):
+                num    = _numbers[j] if j < len(_numbers) else f"{j+1}."
+                pick_s = _md_escape(leg["pick"])
+                lines.append(f"  {num} {pick_s} ({leg['prob']}%)")
+            lines.append(f"  📊 Bundle: *{bundle['bundle_prob']}%*")
+            lines.append("")
+            total_legs    += len(bundle["legs"])
+            combined_prob *= bundle["bundle_prob"] / 100.0
+
+        combined_pct = round(combined_prob * 100, 1)
+        lines.append("━━━━━━━━━━━━━━━━━━━━")
+        lines.append(f"📊 *Prob. combinada total: {combined_pct}%*")
+        lines.append(f"🎰 *Patas totales: {total_legs}*")
+        lines.append("🌙 *Riesgo: SOÑADOR*")
+        lines.append("")
+
+    if parlay_id:
+        total_legs_count = sum(len(b["legs"]) for b in bundles) if bundles else 1
+        result_template  = "W" * total_legs_count
+        lines.append(f"🆔 ID: `{parlay_id}`")
+        lines.append(f"📝 Reporta resultados: `/resultado {parlay_id} {result_template}`")
+        lines.append("_  (W=Ganó, L=Perdió, X=Cancelado — una letra por pata)_")
+        lines.append("")
+
+    lines.append("⚠️ _Parlay recreativo de alto riesgo. Apuesta solo lo que estés dispuesto a perder._")
     return "\n".join(lines)
 
 
@@ -945,13 +1337,15 @@ def format_parlay_safe(
             sport_e = leg.get("sport_emoji", "")
             prefix  = f"{sport_e} " if sport_e else ""
             cal     = leg.get("calibration_note", "")
-            cal_tag = f" _↺{cal}_" if cal else ""
+            cal_tag = f" _↺{_md_escape(cal)}_" if cal else ""
             risk_s  = leg.get("risk_score", 0.0)
             risk_lbl = f" `r={risk_s:.2f}`" if risk_s > 0 else ""
             sep     = leg.get("p_second", 0.0)
             sep_lbl = f" sep={leg['prob']-sep:.0f}pp" if sep > 0 else ""
+            match_s = _md_escape(leg['match'])
+            pick_s  = _md_escape(leg['pick'])
             lines.append(
-                f"  {num} {prefix}{leg['match']} → *{leg['pick']}*"
+                f"  {num} {prefix}{match_s} → *{pick_s}*"
                 f" ({leg['prob']}%{risk_lbl}{sep_lbl}){cal_tag}"
             )
         # Combined probability
@@ -979,9 +1373,9 @@ def format_parlay_safe(
     lines.append("")
 
     if parlay_id:
-        lines.append(f"�� ID: `{parlay_id}`")
+        lines.append(f"🆔 ID: `{parlay_id}`")
         lines.append(
-            f"📝 _Reporta resultados: `/resultado {parlay_id} {'W'*max(len(legs),1)}`_"
+            f"📝 Reporta resultados: `/resultado {parlay_id} {'W'*max(len(legs),1)}`"
         )
         lines.append("_  (W=Ganó, L=Perdió, X=Cancelado — una letra por pata)_")
         lines.append("")
