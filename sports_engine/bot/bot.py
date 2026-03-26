@@ -288,9 +288,8 @@ def load_tomorrow_matches_multisport() -> list:
 
     Sources
     -------
-    - Soccer : local ``tomorrow_matches.csv`` (written by ``update_matches()``
-               with tomorrow's date; falls back to ``today_matches.csv`` for
-               compatibility with older deployments that lack the tomorrow CSV)
+    - Soccer : Postgres fixtures table (preferred when DATABASE_URL is set),
+               then local ``tomorrow_matches.csv`` as fallback.
     - NBA / NFL / MLB : ESPN scoreboard with ``dates=YYYYMMDD`` for tomorrow
     """
     tomorrow_dt  = datetime.now(timezone.utc) + timedelta(days=1)
@@ -299,43 +298,76 @@ def load_tomorrow_matches_multisport() -> list:
 
     matches: list = []
 
-    # ── Soccer from tomorrow_matches.csv ──────────────────────────────────
-    _pending = {"NS", "TBD", "PST", "SUSP", "INT"}
-    # Prefer the dedicated tomorrow CSV; fall back to today's CSV (which only
-    # helps if it somehow contains tomorrow-dated rows, e.g. late-night fetches)
-    _loaded_from: str = ""
-    for _csv_path in (DATA_PATH_TOMORROW, DATA_PATH):
-        try:
-            with open(_csv_path, newline="", encoding="utf-8") as csvfile:
-                for row in csv.DictReader(csvfile):
-                    # Enforce date: only rows that belong to tomorrow
-                    if row.get("date", "").strip() != tomorrow_str:
-                        continue
-                    status = row.get("status", "NS").strip()
-                    if status and status not in _pending:
-                        continue
-                    matches.append({
-                        "home":       row["home"].strip(),
-                        "away":       row["away"].strip(),
-                        "league":     row.get("league", "").strip(),
-                        "sport":      "soccer",
-                        "round":      row.get("round", "").strip(),
-                        "tournament": row.get("tournament", "").strip(),
-                    })
-            if matches:
-                _loaded_from = _csv_path
-                # Found valid rows in this CSV — no need to try the fallback
-                break
-        except (FileNotFoundError, OSError):
-            pass
-        except Exception as exc:
-            logger.debug("load_tomorrow_matches_multisport: soccer CSV error (%s): %s", _csv_path, exc)
+    # ── Soccer: try Postgres first ────────────────────────────────────────
+    _soccer_from_db = False
+    try:
+        from core.db import is_available as _db_ok, get_upcoming_fixtures
+        if _db_ok():
+            # Query up to 48 h so we cover all of tomorrow regardless of current time
+            db_rows = get_upcoming_fixtures(hours=48)
+            for row in db_rows:
+                k = row.get("kickoff_utc")
+                if k is None:
+                    continue
+                # Normalise to UTC-aware datetime before extracting date
+                if hasattr(k, "tzinfo") and k.tzinfo is None:
+                    k = k.replace(tzinfo=timezone.utc)
+                if k.astimezone(timezone.utc).strftime("%Y-%m-%d") != tomorrow_str:
+                    continue
+                matches.append({
+                    "home":       row["home_team"],
+                    "away":       row["away_team"],
+                    "league":     row.get("league_name", ""),
+                    "sport":      row.get("sport", "soccer"),
+                    "round":      "",
+                    "tournament": row.get("league_name", ""),
+                })
+            _soccer_from_db = True
+            logger.debug(
+                "load_tomorrow_matches_multisport: %d soccer match(es) for %s (source: DB)",
+                len(matches), tomorrow_str,
+            )
+    except Exception as exc:
+        logger.warning("load_tomorrow_matches_multisport: DB read failed — %s", exc)
 
-    logger.debug(
-        "load_tomorrow_matches_multisport: %d soccer match(es) for %s (source: %s)",
-        len(matches), tomorrow_str,
-        os.path.basename(_loaded_from) if _loaded_from else "none",
-    )
+    # ── Soccer fallback: CSV files ─────────────────────────────────────────
+    if not _soccer_from_db:
+        _pending = {"NS", "TBD", "PST", "SUSP", "INT"}
+        # Prefer the dedicated tomorrow CSV; fall back to today's CSV (which only
+        # helps if it somehow contains tomorrow-dated rows, e.g. late-night fetches)
+        _loaded_from: str = ""
+        for _csv_path in (DATA_PATH_TOMORROW, DATA_PATH):
+            try:
+                with open(_csv_path, newline="", encoding="utf-8") as csvfile:
+                    for row in csv.DictReader(csvfile):
+                        # Enforce date: only rows that belong to tomorrow
+                        if row.get("date", "").strip() != tomorrow_str:
+                            continue
+                        status = row.get("status", "NS").strip()
+                        if status and status not in _pending:
+                            continue
+                        matches.append({
+                            "home":       row["home"].strip(),
+                            "away":       row["away"].strip(),
+                            "league":     row.get("league", "").strip(),
+                            "sport":      "soccer",
+                            "round":      row.get("round", "").strip(),
+                            "tournament": row.get("tournament", "").strip(),
+                        })
+                if matches:
+                    _loaded_from = _csv_path
+                    # Found valid rows in this CSV — no need to try the fallback
+                    break
+            except (FileNotFoundError, OSError):
+                pass
+            except Exception as exc:
+                logger.debug("load_tomorrow_matches_multisport: soccer CSV error (%s): %s", _csv_path, exc)
+
+        logger.debug(
+            "load_tomorrow_matches_multisport: %d soccer match(es) for %s (source: %s)",
+            len(matches), tomorrow_str,
+            os.path.basename(_loaded_from) if _loaded_from else "none",
+        )
 
     # ── NBA / NFL / MLB from ESPN (tomorrow's date) ────────────────────────
     _espn_scheduled = {"Scheduled", "Pregame", "Pre-Game"}
@@ -4033,15 +4065,20 @@ async def autoscan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def matches_update_job(context: ContextTypes.DEFAULT_TYPE):
-    """Scheduled job (every 15 min): refresh today_matches.csv from API-Sports."""
+    """Scheduled job (every 15 min): refresh today + tomorrow fixtures from API-Sports."""
     global _last_csv_update
     if not _matches_lock.acquire(blocking=False):
         logger.debug("matches_update_job: skipped (another refresh in progress)")
         return
     try:
         update_matches()
+        _tomorrow_str = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+        try:
+            update_matches(date=_tomorrow_str, data_path=DATA_PATH_TOMORROW)
+        except Exception as exc:
+            logger.warning("matches_update_job: tomorrow update failed: %s", exc)
         _last_csv_update = _time.time()
-        logger.info("matches_update_job: CSV actualizado")
+        logger.info("matches_update_job: fixtures actualizados (hoy + mañana)")
     except Exception as exc:
         logger.warning("matches_update_job: error al actualizar partidos: %s", exc)
     finally:
@@ -4407,6 +4444,21 @@ def main():
     if not TELEGRAM_TOKEN:
         logger.error("TOKEN no está configurado. Saliendo.")
         sys.exit(1)
+
+    # ── DB bootstrap: create fixtures table if DATABASE_URL is configured ──
+    # This is idempotent (IF NOT EXISTS) so safe to call on every startup.
+    try:
+        from core.db import is_available as _db_available, ensure_table as _db_ensure_table
+        if _db_available():
+            logger.info("PostgreSQL: DATABASE_URL detectado — inicializando tabla fixtures…")
+            if _db_ensure_table():
+                logger.info("PostgreSQL: tabla fixtures lista ✓")
+            else:
+                logger.warning("PostgreSQL: ensure_table() falló — revisa los logs anteriores")
+        else:
+            logger.info("PostgreSQL: no configurado — modo CSV (configura DATABASE_URL para persistencia)")
+    except Exception as _db_exc:
+        logger.warning("PostgreSQL: error en bootstrap: %s", _db_exc)
 
     # Update today's matches (best-effort); record timestamp on success
     try:
