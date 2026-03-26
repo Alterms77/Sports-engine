@@ -10,10 +10,10 @@ _SPORTS_ENGINE_DIR = os.path.dirname(_THIS_DIR)
 if _SPORTS_ENGINE_DIR not in sys.path:
     sys.path.insert(0, _SPORTS_ENGINE_DIR)
 
-from core.config import API_SPORTS_KEY
+from core.config import API_SPORTS_KEY, FOOTBALL_DATA_TOKEN
 
-# Football-Data.org uses the same key via the TOKEN env var as a fallback
-API_TOKEN = os.getenv("FOOTBALL_DATA_TOKEN") or API_SPORTS_KEY
+# Football-Data.org uses its own token; falls back to API_SPORTS_KEY when not set
+API_TOKEN = FOOTBALL_DATA_TOKEN or API_SPORTS_KEY
 BASE_URL = "https://api.football-data.org/v4"
 
 if not API_TOKEN:

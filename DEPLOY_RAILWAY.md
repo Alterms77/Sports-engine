@@ -1,128 +1,152 @@
-# Deploying Sports-Engine on Railway with PostgreSQL
+# Deploying Sports-Engine on Railway
 
-This guide explains how to add a PostgreSQL database to your Sports-Engine
-deployment on Railway so the bot persists fixture data and **never re-uses
-finished matches** in parlay generation.
-
----
-
-## Why PostgreSQL?
-
-The bot previously read upcoming soccer fixtures from a local CSV file
-(`sports_engine/data/today_matches.csv`). If the CSV became stale (e.g. an
-API refresh failed or the container restarted without writing a fresh file),
-the bot could include already-finished matches in `/parlay` suggestions.
-
-With PostgreSQL the bot:
-
-1. **Auto-creates** the `fixtures` table on startup (idempotent — safe on
-   every deploy).
-2. **Upserts** every fixture (including finished ones) on each API refresh.
-3. **Queries only upcoming, not-started** fixtures when building parlays.
-4. Falls back to the CSV automatically when `DATABASE_URL` is not set (local
-   development or if the DB is temporarily unavailable).
+This guide covers every step needed to deploy the bot on Railway, including
+all required and optional environment variables.
 
 ---
 
-## Step 1 — Add the PostgreSQL plugin in Railway
+## Quick start (minimum viable deploy)
+
+Set **exactly three** variables in Railway → your service → **Variables**:
+
+```
+TOKEN          = <your Telegram Bot token from @BotFather>
+API_SPORTS_KEY = <your API-Football key from dashboard.api-football.com>
+DATABASE_URL   = <auto-filled by Railway Postgres plugin — see Step 1>
+```
+
+That's it. Every other variable is optional with sensible defaults.
+
+---
+
+## Step 1 — Add a PostgreSQL database (recommended)
+
+A Postgres database lets the bot remember fixture results across restarts so
+it never suggests already-finished matches in parlays.
 
 1. Open your Railway **project**.
 2. Click **+ New** → **Database** → **PostgreSQL**.
-3. Railway provisions the database and shows it in your project overview.
+3. Railway provisions the database instantly.
+4. Open your **bot service** → **Variables** → **Add Variable Reference**.
+5. Select the PostgreSQL plugin and import **`DATABASE_URL`**.
+
+> Always use `DATABASE_URL` (private/internal URL), **not** `DATABASE_PUBLIC_URL`.
+
+The bot auto-creates all required tables on startup (idempotent `IF NOT EXISTS`).
+No manual SQL needed.
+
+When `DATABASE_URL` is not set the bot falls back to CSV storage — perfectly
+fine for local development and testing.
 
 ---
 
-## Step 2 — Link the database to your worker service
+## Step 2 — Set variables in Railway
 
-Railway injects database variables into a service through a **Variable
-Reference**.
+Go to your service → **Variables** and add the values below.
+Copy variable names from `.env.example` at the repo root (never commit real secrets).
 
-1. In Railway, open your **worker** service.
-2. Go to **Variables** → **Add Variable Reference** (or **New Variable** →
-   **Add from service/plugin**).
-3. Select the **PostgreSQL** plugin you just created.
-4. Import at minimum: **`DATABASE_URL`**.
+### Required
 
-Alternatively you can copy the value of `DATABASE_URL` from the Postgres
-plugin's Variables tab and paste it manually into `worker → Variables`.
+| Variable | Where to get it |
+|---|---|
+| `TOKEN` | [@BotFather](https://t.me/BotFather) → `/newbot` |
 
-> **Important:** always use `DATABASE_URL` (the private/internal URL), **not**
-> `DATABASE_PUBLIC_URL`. The internal URL routes traffic within Railway's
-> private network and avoids egress costs.
+> `TOKEN` is the only truly required variable. Without it the bot refuses to
+> start and logs a clear error listing what is missing.
 
----
+### Recommended (degraded mode without these)
 
-## Step 3 — Required environment variables
-
-In your worker service Variables, make sure you have **all three**:
-
-```
-TOKEN            = <your Telegram Bot token>
-API_SPORTS_KEY   = <your API-Sports / API-Football key>
-DATABASE_URL     = postgresql://user:password@postgres.railway.internal:5432/railway
-```
-
-> `DATABASE_URL` is filled in automatically via the Variable Reference in
-> Step 2.  The scheme may start with `postgres://` — the bot normalises it.
-
----
-
-## Step 4 — Deploy
-
-Trigger a new deployment of the **worker** service (Railway usually does this
-automatically when variables change). On startup the bot:
-
-1. Detects `DATABASE_URL` in the environment and logs:
-   `PostgreSQL: DATABASE_URL detectado — inicializando tabla fixtures…`
-2. Creates the `fixtures` table (and its indices) if they do not exist — no
-   manual SQL required.  Logs: `PostgreSQL: tabla fixtures lista ✓`
-3. Fetches today's and tomorrow's fixtures from API-Sports and upserts them.
-4. Refreshes fixtures every 10 minutes in the background.
-
-You can confirm the table was created by opening the Railway Postgres plugin →
-**Data** tab and checking for the `fixtures` table.
-
----
-
-## Environment variables reference
-
-| Variable | Required | Description |
+| Variable | Default | Where to get it / notes |
 |---|---|---|
-| `TOKEN` | **Yes** | Telegram Bot API token. |
-| `API_SPORTS_KEY` | **Yes** | API-Sports / API-Football key for fetching live fixtures. |
-| `DATABASE_URL` | **Yes** (for Postgres) | Private connection string from Railway Postgres plugin. |
-| `DATABASE_PUBLIC_URL` | No | Public connection string — only needed for external tools (DBeaver, psql from your PC). Do **not** use in the bot. |
-| `ALERTS_CHANNEL_ID` | No | Telegram channel ID for daily alert broadcasts. |
-| `ODDS_API_KEY` | No | The Odds API key for live bookmaker odds in the auto-scanner. |
+| `API_SPORTS_KEY` | _(none)_ | [dashboard.api-football.com](https://dashboard.api-football.com) — live soccer fixtures |
+| `DATABASE_URL` | _(none)_ | Auto-injected by Railway Postgres plugin — persistent fixture storage |
+
+### Optional — more data sources
+
+| Variable | Default | Description |
+|---|---|---|
+| `FOOTBALL_DATA_TOKEN` | _(none)_ | [football-data.org](https://www.football-data.org) token; falls back to `API_SPORTS_KEY` |
+| `SPORTRADAR_API_KEY` | _(none)_ | [developer.sportradar.com](https://developer.sportradar.com) — richer NBA/NFL/MLB stats |
+| `SPORTRADAR_ACCESS` | `trial` | `"trial"` or `""` (production licence) |
+| `ODDS_API_KEY` | _(none)_ | [the-odds-api.com](https://the-odds-api.com) — live bookmaker odds for auto-scanner |
+| `POSTGRES_URL` | _(none)_ | Alternative Postgres URL name (fallback when `DATABASE_URL` is absent) |
+
+### Optional — Telegram
+
+| Variable | Default | Description |
+|---|---|---|
+| `ALERTS_CHANNEL_ID` | _(none)_ | Channel ID (e.g. `-1001234567890`) for daily broadcast alerts |
+
+### Optional — auto-scanner tuning
+
+| Variable | Default | Description |
+|---|---|---|
+| `AUTO_SCAN_INTERVAL` | `300` | Seconds between full scan cycles (5 min). Increase on free Odds API tier. |
+| `AUTO_SCAN_MIN_EV` | `5.0` | Minimum EV % to send an alert (avoids low-value noise) |
+| `AUTO_SCAN_DEDUP_TTL` | `3600` | Seconds before a duplicate alert can be re-sent (1 hour) |
+
+### Optional — parlay calibration
+
+| Variable | Default | Description |
+|---|---|---|
+| `PARLAY_CAL_WINDOW` | `200` | Rolling window of recent legs used for calibration |
+| `PARLAY_EWMA_DECAY` | `0.95` | EWMA decay factor (`< 1` = more recency weight; `1.0` = simple mean) |
+
+### Optional — runtime
+
+| Variable | Default | Description |
+|---|---|---|
+| `LOG_LEVEL` | `INFO` | Python logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `PORT` | `8080` | HTTP port for Railway health checks (Railway sets this automatically) |
 
 ---
 
-## Startup log reference
+## Step 3 — Deploy
 
-When everything is configured correctly you should see lines like these in
-Railway → Deployments → Logs:
+Push a commit or click **Deploy** in Railway. On startup the bot logs:
 
 ```
-DATABASE_URL: configured ✓ (Postgres fixture storage enabled)
+TOKEN: configured ✓ (Telegram bot ready)
 API_SPORTS_KEY: configured ✓ (live soccer fixtures enabled)
-PostgreSQL: DATABASE_URL detectado — inicializando tabla fixtures…
-PostgreSQL: tabla fixtures lista ✓
+DATABASE_URL: configured ✓ (Postgres fixture storage enabled)
+PostgreSQL: DATABASE_URL detectado — inicializando tablas…
+PostgreSQL: tablas listas ✓ (fixtures, bot_subscribers, tracked_markets)
 update_matches: upserted 18 fixture(s) to Postgres (total for date: 18)
+🤖 Bot corriendo — 5 deportes + datos en vivo…
 ```
 
-If you see `DATABASE_URL: NOT set` or `API_SPORTS_KEY: NOT set` in the logs,
-add the missing variable in Railway → Variables.
+If `TOKEN` is missing the bot exits immediately with:
+
+```
+❌ Missing required environment variable(s):
+  • TOKEN  (Telegram Bot API token)
+
+Set them in Railway → Variables (or in your .env file locally).
+```
+
+If `API_SPORTS_KEY` or `DATABASE_URL` is absent you will see warning lines but
+the bot still starts and operates in degraded mode (model-based predictions,
+CSV storage).
 
 ---
 
-## Debug CLI
-
-A small command-line tool is included to inspect the fixtures database:
+## Local development
 
 ```bash
-# From the repo root (requires DATABASE_URL in .env or environment)
-python sports_engine/db/fixtures_cli.py
+# 1. Clone and install
+git clone https://github.com/Alterms77/Sports-engine.git
+cd Sports-engine
+pip install -r requirements.txt
+
+# 2. Create your .env from the template
+cp .env.example .env
+# Edit .env and fill in at least TOKEN (and optionally the API keys)
+
+# 3. Run the bot
+python sports_engine/bot/bot.py
 ```
+
+The `.env` file is listed in `.gitignore` — it will never be committed.
 
 ---
 
@@ -137,17 +161,12 @@ python sports_engine/db/fixtures_cli.py
 
 ---
 
-## Local development (no Postgres)
+## Debug CLI
 
-No changes needed. Simply omit `DATABASE_URL` from your `.env` file and the
-bot will continue reading from `sports_engine/data/today_matches.csv` as
-before.
-
-To test with a local Postgres instance:
+Inspect the fixtures database from the command line:
 
 ```bash
-pip install "psycopg[binary]>=3.1"
-export DATABASE_URL="postgresql://postgres:password@localhost:5432/sports_engine"
+# Requires DATABASE_URL in .env or environment
 python sports_engine/db/fixtures_cli.py
 ```
 
