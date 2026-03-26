@@ -565,3 +565,96 @@ class TestLoadTomorrowMatchesDbPath:
 
         soccer_results = [m for m in result if m.get("sport") == "soccer"]
         assert len(soccer_results) == 0, "Today's kickoff should NOT appear in tomorrow's matches"
+
+
+# ---------------------------------------------------------------------------
+# Subscribers CRUD (no-ops when DB unavailable)
+# ---------------------------------------------------------------------------
+
+class TestSubscribersCrud:
+    """Verify subscriber CRUD functions return safe defaults when DB unavailable."""
+
+    def test_get_subscribers_returns_empty_when_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_URL", raising=False)
+        assert db_module.get_subscribers() == []
+
+    def test_add_subscriber_returns_false_when_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_URL", raising=False)
+        assert db_module.add_subscriber(12345) is False
+
+    def test_remove_subscriber_returns_false_when_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_URL", raising=False)
+        assert db_module.remove_subscriber(12345) is False
+
+
+# ---------------------------------------------------------------------------
+# Tracked markets CRUD (no-ops when DB unavailable)
+# ---------------------------------------------------------------------------
+
+class TestTrackedMarketsCrud:
+    """Verify tracked_markets CRUD functions return safe defaults when DB unavailable."""
+
+    def test_get_tracked_markets_returns_empty_when_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_URL", raising=False)
+        assert db_module.get_tracked_markets_raw() == []
+
+    def test_save_tracked_market_returns_false_when_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_URL", raising=False)
+        result = db_module.save_tracked_market("NBA", "A vs B", "Over 220.5", "", [])
+        assert result is False
+
+    def test_remove_tracked_market_returns_false_when_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_URL", raising=False)
+        assert db_module.remove_tracked_market("A vs B", "Over 220.5") is False
+
+    def test_clear_tracked_markets_returns_minus_one_when_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_URL", raising=False)
+        assert db_module.clear_tracked_markets() == -1
+
+
+# ---------------------------------------------------------------------------
+# Subscribers persistence via bot._load_subscribers / _save_subscribers
+# ---------------------------------------------------------------------------
+
+class TestSubscribersPersistence:
+    """Verify _load_subscribers / _save_subscribers prefer Postgres when available."""
+
+    def test_load_uses_db_when_available(self, monkeypatch):
+        """_load_subscribers returns DB rows when DB is available."""
+        import bot.bot as bot
+
+        monkeypatch.setattr("core.db.is_available", lambda: True)
+        monkeypatch.setattr("core.db.get_subscribers", lambda: [111, 222])
+
+        result = bot._load_subscribers()
+        assert result == [111, 222]
+
+    def test_load_falls_back_to_json_when_db_unavailable(self, monkeypatch, tmp_path):
+        """_load_subscribers falls back to JSON when DB is unavailable."""
+        import bot.bot as bot
+
+        subs_file = tmp_path / "alert_subscribers.json"
+        subs_file.write_text('{"subscribers": [333, 444]}')
+
+        monkeypatch.setattr("core.db.is_available", lambda: False)
+        monkeypatch.setattr(bot, "_SUBSCRIBERS_PATH", str(subs_file))
+
+        result = bot._load_subscribers()
+        assert result == [333, 444]
+
+    def test_load_returns_empty_when_no_file_and_db_unavailable(self, monkeypatch, tmp_path):
+        """_load_subscribers returns [] when JSON file doesn't exist and DB is down."""
+        import bot.bot as bot
+
+        monkeypatch.setattr("core.db.is_available", lambda: False)
+        monkeypatch.setattr(bot, "_SUBSCRIBERS_PATH", str(tmp_path / "nonexistent.json"))
+
+        result = bot._load_subscribers()
+        assert result == []

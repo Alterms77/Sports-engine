@@ -52,9 +52,9 @@ ENV PYTHONPATH=/app/sports_engine
 RUN addgroup --system botgroup && adduser --system --ingroup botgroup botuser
 USER botuser
 
-# ── Healthcheck: verify Python can import the bot module ─────────────────────
-HEALTHCHECK --interval=60s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import sports.football; import api.live_aggregator" || exit 1
+# ── Healthcheck: verify the HTTP health endpoint responds ────────────────────
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
 
 # ── Entrypoint ────────────────────────────────────────────────────────────────
 CMD ["python", "sports_engine/bot/bot.py"]

@@ -2,11 +2,13 @@ import os
 import re
 import sys
 import csv
+import json
 import asyncio as _asyncio
 import logging
 import threading
 import time as _time
 from datetime import datetime, timezone, timedelta
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from dotenv import load_dotenv
 
 # Allow importing from sports_engine/ regardless of working directory
@@ -65,6 +67,47 @@ logging.basicConfig(
     level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
 )
 logger = logging.getLogger(__name__)
+
+
+# ===============================
+# 🏥 HEALTH CHECK SERVER (Railway)
+# ===============================
+
+def _start_health_server() -> None:
+    """Start a minimal HTTP server on $PORT for Railway health checks.
+
+    Railway's ``web`` process type requires the service to listen on $PORT.
+    This daemon thread serves GET /health (and /) with HTTP 200 so Railway
+    knows the bot is alive, without interfering with the Telegram polling loop.
+    """
+    port = int(os.environ.get("PORT", "8080"))
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            if self.path in ("/", "/health"):
+                body = b"OK"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, fmt, *args):  # noqa: N802
+            pass  # suppress HTTP access log noise in Railway logs
+
+    try:
+        # Bind to all interfaces as required by Railway (container networking).
+        # Only /health and / respond; all other paths return 404.
+        srv = HTTPServer(("0.0.0.0", port), _Handler)
+        t = threading.Thread(target=srv.serve_forever, name="health-server", daemon=True)
+        t.start()
+        logger.info("Health check server running on port %d (/health)", port)
+    except Exception as exc:
+        logger.warning("Could not start health check server on port %d: %s", port, exc)
+
 
 # ===============================
 # 📁 PATHS
@@ -1403,10 +1446,21 @@ _subscribers_lock = threading.Lock()
 
 
 def _load_subscribers() -> list[int]:
-    """Return list of subscribed chat_ids from the JSON store."""
+    """Return list of subscribed chat_ids.
+
+    Prefers Postgres when DATABASE_URL is configured so subscriptions survive
+    Railway redeployments.  Falls back to the local JSON file otherwise.
+    """
+    try:
+        from core.db import is_available as _db_ok, get_subscribers
+        if _db_ok():
+            return get_subscribers()
+    except Exception as exc:
+        logger.warning("_load_subscribers: DB read failed, falling back to JSON — %s", exc)
+
+    # JSON fallback (local dev or DB unavailable)
     try:
         with open(_SUBSCRIBERS_PATH, encoding="utf-8") as f:
-            import json
             data = json.load(f)
             return [int(x) for x in data.get("subscribers", [])]
     except FileNotFoundError:
@@ -1417,8 +1471,26 @@ def _load_subscribers() -> list[int]:
 
 
 def _save_subscribers(subs: list[int]) -> None:
-    """Persist the subscriber list to JSON."""
-    import json
+    """Persist the subscriber list.
+
+    Writes to Postgres when available; also mirrors to JSON so local dev
+    and CSV-only deployments keep working.
+    """
+    # Postgres path (preferred on Railway — survives redeployments)
+    try:
+        from core.db import is_available as _db_ok, add_subscriber, remove_subscriber, get_subscribers
+        if _db_ok():
+            current = set(get_subscribers())
+            new_set = set(subs)
+            for uid in new_set - current:
+                add_subscriber(uid)
+            for uid in current - new_set:
+                remove_subscriber(uid)
+            return  # DB updated successfully; JSON file not needed
+    except Exception as exc:
+        logger.warning("_save_subscribers: DB write failed, falling back to JSON — %s", exc)
+
+    # JSON fallback
     try:
         with open(_SUBSCRIBERS_PATH, "w", encoding="utf-8") as f:
             json.dump({"subscribers": subs}, f)
@@ -4439,20 +4511,25 @@ def main():
     global _last_csv_update
     logger.info("🚀 Iniciando Sports Engine Bot…")
 
+    # ── Start HTTP health check server (required for Railway web process) ──
+    # Must be started before validate_config() so Railway sees the port binding
+    # immediately and doesn't time out waiting for the service to come up.
+    _start_health_server()
+
     validate_config()
 
     if not TELEGRAM_TOKEN:
         logger.error("TOKEN no está configurado. Saliendo.")
         sys.exit(1)
 
-    # ── DB bootstrap: create fixtures table if DATABASE_URL is configured ──
+    # ── DB bootstrap: create all tables if DATABASE_URL is configured ──
     # This is idempotent (IF NOT EXISTS) so safe to call on every startup.
     try:
         from core.db import is_available as _db_available, ensure_table as _db_ensure_table
         if _db_available():
-            logger.info("PostgreSQL: DATABASE_URL detectado — inicializando tabla fixtures…")
+            logger.info("PostgreSQL: DATABASE_URL detectado — inicializando tablas…")
             if _db_ensure_table():
-                logger.info("PostgreSQL: tabla fixtures lista ✓")
+                logger.info("PostgreSQL: tablas listas ✓ (fixtures, bot_subscribers, tracked_markets)")
             else:
                 logger.warning("PostgreSQL: ensure_table() falló — revisa los logs anteriores")
         else:

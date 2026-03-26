@@ -1,0 +1,16 @@
+# Railway deployment configuration
+# https://docs.railway.app/reference/config-as-code
+
+[build]
+builder = "dockerfile"
+
+[deploy]
+startCommand = "python sports_engine/bot/bot.py"
+# Restart the service automatically if it crashes (up to 10 times)
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 10
+
+# Railway health check — the bot starts an HTTP server on $PORT
+# so Railway can confirm the service is alive after deployment.
+healthcheckPath = "/health"
+healthcheckTimeout = 120
