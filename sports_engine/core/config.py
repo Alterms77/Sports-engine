@@ -30,6 +30,11 @@ TELEGRAM_TOKEN: str = os.getenv("TOKEN", "")
 API_SPORTS_KEY: str = os.getenv("API_SPORTS_KEY", "")
 ALERTS_CHANNEL_ID: str = os.getenv("ALERTS_CHANNEL_ID", "")
 
+# ── Football-Data.org (https://www.football-data.org) ─────────────────────────
+# Optional alternative to API_SPORTS_KEY for competition/match data.
+# Falls back to API_SPORTS_KEY when not set.
+FOOTBALL_DATA_TOKEN: str = os.getenv("FOOTBALL_DATA_TOKEN", "")
+
 # ── The Odds API (https://the-odds-api.com) ───────────────────────────────────
 # Optional: if set, the auto-scanner fetches live bookmaker odds automatically.
 # Without this key the scanner still runs, using ESPN events + model-based odds.
@@ -317,13 +322,39 @@ def detect_league(home_team: str, away_team: str) -> str:
 
 
 def validate_config() -> bool:
-    """Validate that required environment variables are set and log API key status."""
-    ok = True
-    if not TELEGRAM_TOKEN:
-        logger.error("TOKEN environment variable is not set")
-        ok = False
+    """Validate required environment variables and log status of all optional ones.
 
-    # Report DATABASE_URL status so Railway logs make it clear whether Postgres is active
+    Returns True when all *required* variables are present.
+    Raises RuntimeError listing every missing required key so Railway logs
+    show a single, actionable error instead of a cryptic crash later.
+    """
+    missing: list[str] = []
+
+    # ── Required ──────────────────────────────────────────────────────────────
+    if not TELEGRAM_TOKEN:
+        missing.append("TOKEN  (Telegram Bot API token)")
+
+    if missing:
+        msg = (
+            "❌ Missing required environment variable(s):\n"
+            + "\n".join(f"  • {v}" for v in missing)
+            + "\n\nSet them in Railway → Variables (or in your .env file locally)."
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
+
+    logger.info("TOKEN: configured ✓ (Telegram bot ready)")
+
+    # ── Recommended (warn when absent) ────────────────────────────────────────
+    if API_SPORTS_KEY:
+        logger.info("API_SPORTS_KEY: configured ✓ (live soccer fixtures enabled)")
+    else:
+        logger.warning(
+            "API_SPORTS_KEY: NOT set — live soccer match updates disabled. "
+            "Set this in Railway to get today's real fixtures."
+        )
+
+    # ── DATABASE_URL / POSTGRES_URL ───────────────────────────────────────────
     _db_url = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
     if _db_url:
         logger.info("DATABASE_URL: configured ✓ (Postgres fixture storage enabled)")
@@ -334,13 +365,12 @@ def validate_config() -> bool:
             "persistent fixture storage and avoid stale-data issues."
         )
 
-    # Report optional API key status so Railway logs make it clear what's available
-    if API_SPORTS_KEY:
-        logger.info("API_SPORTS_KEY: configured ✓ (live soccer fixtures enabled)")
+    # ── Fully optional (info only) ────────────────────────────────────────────
+    if FOOTBALL_DATA_TOKEN:
+        logger.info("FOOTBALL_DATA_TOKEN: configured ✓ (football-data.org enabled)")
     else:
-        logger.warning(
-            "API_SPORTS_KEY: NOT set — live soccer match updates disabled. "
-            "Set this in Railway to get today's real fixtures."
+        logger.info(
+            "FOOTBALL_DATA_TOKEN: not set (optional — falls back to API_SPORTS_KEY)"
         )
 
     if SPORTRADAR_API_KEY:
@@ -367,4 +397,4 @@ def validate_config() -> bool:
             "ALERTS_CHANNEL_ID: not set (optional — daily alerts sent to subscribers only)"
         )
 
-    return ok
+    return True

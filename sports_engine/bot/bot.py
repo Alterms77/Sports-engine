@@ -4518,10 +4518,6 @@ def main():
 
     validate_config()
 
-    if not TELEGRAM_TOKEN:
-        logger.error("TOKEN no está configurado. Saliendo.")
-        sys.exit(1)
-
     # ── DB bootstrap: create all tables if DATABASE_URL is configured ──
     # This is idempotent (IF NOT EXISTS) so safe to call on every startup.
     try:
