@@ -2,11 +2,13 @@ import os
 import re
 import sys
 import csv
+import json
 import asyncio as _asyncio
 import logging
 import threading
 import time as _time
 from datetime import datetime, timezone, timedelta
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from dotenv import load_dotenv
 
 # Allow importing from sports_engine/ regardless of working directory
@@ -65,6 +67,47 @@ logging.basicConfig(
     level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
 )
 logger = logging.getLogger(__name__)
+
+
+# ===============================
+# 🏥 HEALTH CHECK SERVER (Railway)
+# ===============================
+
+def _start_health_server() -> None:
+    """Start a minimal HTTP server on $PORT for Railway health checks.
+
+    Railway's ``web`` process type requires the service to listen on $PORT.
+    This daemon thread serves GET /health (and /) with HTTP 200 so Railway
+    knows the bot is alive, without interfering with the Telegram polling loop.
+    """
+    port = int(os.environ.get("PORT", "8080"))
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            if self.path in ("/", "/health"):
+                body = b"OK"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, fmt, *args):  # noqa: N802
+            pass  # suppress HTTP access log noise in Railway logs
+
+    try:
+        # Bind to all interfaces as required by Railway (container networking).
+        # Only /health and / respond; all other paths return 404.
+        srv = HTTPServer(("0.0.0.0", port), _Handler)
+        t = threading.Thread(target=srv.serve_forever, name="health-server", daemon=True)
+        t.start()
+        logger.info("Health check server running on port %d (/health)", port)
+    except Exception as exc:
+        logger.warning("Could not start health check server on port %d: %s", port, exc)
+
 
 # ===============================
 # 📁 PATHS
@@ -288,9 +331,8 @@ def load_tomorrow_matches_multisport() -> list:
 
     Sources
     -------
-    - Soccer : local ``tomorrow_matches.csv`` (written by ``update_matches()``
-               with tomorrow's date; falls back to ``today_matches.csv`` for
-               compatibility with older deployments that lack the tomorrow CSV)
+    - Soccer : Postgres fixtures table (preferred when DATABASE_URL is set),
+               then local ``tomorrow_matches.csv`` as fallback.
     - NBA / NFL / MLB : ESPN scoreboard with ``dates=YYYYMMDD`` for tomorrow
     """
     tomorrow_dt  = datetime.now(timezone.utc) + timedelta(days=1)
@@ -299,43 +341,76 @@ def load_tomorrow_matches_multisport() -> list:
 
     matches: list = []
 
-    # ── Soccer from tomorrow_matches.csv ──────────────────────────────────
-    _pending = {"NS", "TBD", "PST", "SUSP", "INT"}
-    # Prefer the dedicated tomorrow CSV; fall back to today's CSV (which only
-    # helps if it somehow contains tomorrow-dated rows, e.g. late-night fetches)
-    _loaded_from: str = ""
-    for _csv_path in (DATA_PATH_TOMORROW, DATA_PATH):
-        try:
-            with open(_csv_path, newline="", encoding="utf-8") as csvfile:
-                for row in csv.DictReader(csvfile):
-                    # Enforce date: only rows that belong to tomorrow
-                    if row.get("date", "").strip() != tomorrow_str:
-                        continue
-                    status = row.get("status", "NS").strip()
-                    if status and status not in _pending:
-                        continue
-                    matches.append({
-                        "home":       row["home"].strip(),
-                        "away":       row["away"].strip(),
-                        "league":     row.get("league", "").strip(),
-                        "sport":      "soccer",
-                        "round":      row.get("round", "").strip(),
-                        "tournament": row.get("tournament", "").strip(),
-                    })
-            if matches:
-                _loaded_from = _csv_path
-                # Found valid rows in this CSV — no need to try the fallback
-                break
-        except (FileNotFoundError, OSError):
-            pass
-        except Exception as exc:
-            logger.debug("load_tomorrow_matches_multisport: soccer CSV error (%s): %s", _csv_path, exc)
+    # ── Soccer: try Postgres first ────────────────────────────────────────
+    _soccer_from_db = False
+    try:
+        from core.db import is_available as _db_ok, get_upcoming_fixtures
+        if _db_ok():
+            # Query up to 48 h so we cover all of tomorrow regardless of current time
+            db_rows = get_upcoming_fixtures(hours=48)
+            for row in db_rows:
+                k = row.get("kickoff_utc")
+                if k is None:
+                    continue
+                # Normalise to UTC-aware datetime before extracting date
+                if hasattr(k, "tzinfo") and k.tzinfo is None:
+                    k = k.replace(tzinfo=timezone.utc)
+                if k.astimezone(timezone.utc).strftime("%Y-%m-%d") != tomorrow_str:
+                    continue
+                matches.append({
+                    "home":       row["home_team"],
+                    "away":       row["away_team"],
+                    "league":     row.get("league_name", ""),
+                    "sport":      row.get("sport", "soccer"),
+                    "round":      "",
+                    "tournament": row.get("league_name", ""),
+                })
+            _soccer_from_db = True
+            logger.debug(
+                "load_tomorrow_matches_multisport: %d soccer match(es) for %s (source: DB)",
+                len(matches), tomorrow_str,
+            )
+    except Exception as exc:
+        logger.warning("load_tomorrow_matches_multisport: DB read failed — %s", exc)
 
-    logger.debug(
-        "load_tomorrow_matches_multisport: %d soccer match(es) for %s (source: %s)",
-        len(matches), tomorrow_str,
-        os.path.basename(_loaded_from) if _loaded_from else "none",
-    )
+    # ── Soccer fallback: CSV files ─────────────────────────────────────────
+    if not _soccer_from_db:
+        _pending = {"NS", "TBD", "PST", "SUSP", "INT"}
+        # Prefer the dedicated tomorrow CSV; fall back to today's CSV (which only
+        # helps if it somehow contains tomorrow-dated rows, e.g. late-night fetches)
+        _loaded_from: str = ""
+        for _csv_path in (DATA_PATH_TOMORROW, DATA_PATH):
+            try:
+                with open(_csv_path, newline="", encoding="utf-8") as csvfile:
+                    for row in csv.DictReader(csvfile):
+                        # Enforce date: only rows that belong to tomorrow
+                        if row.get("date", "").strip() != tomorrow_str:
+                            continue
+                        status = row.get("status", "NS").strip()
+                        if status and status not in _pending:
+                            continue
+                        matches.append({
+                            "home":       row["home"].strip(),
+                            "away":       row["away"].strip(),
+                            "league":     row.get("league", "").strip(),
+                            "sport":      "soccer",
+                            "round":      row.get("round", "").strip(),
+                            "tournament": row.get("tournament", "").strip(),
+                        })
+                if matches:
+                    _loaded_from = _csv_path
+                    # Found valid rows in this CSV — no need to try the fallback
+                    break
+            except (FileNotFoundError, OSError):
+                pass
+            except Exception as exc:
+                logger.debug("load_tomorrow_matches_multisport: soccer CSV error (%s): %s", _csv_path, exc)
+
+        logger.debug(
+            "load_tomorrow_matches_multisport: %d soccer match(es) for %s (source: %s)",
+            len(matches), tomorrow_str,
+            os.path.basename(_loaded_from) if _loaded_from else "none",
+        )
 
     # ── NBA / NFL / MLB from ESPN (tomorrow's date) ────────────────────────
     _espn_scheduled = {"Scheduled", "Pregame", "Pre-Game"}
@@ -1371,10 +1446,21 @@ _subscribers_lock = threading.Lock()
 
 
 def _load_subscribers() -> list[int]:
-    """Return list of subscribed chat_ids from the JSON store."""
+    """Return list of subscribed chat_ids.
+
+    Prefers Postgres when DATABASE_URL is configured so subscriptions survive
+    Railway redeployments.  Falls back to the local JSON file otherwise.
+    """
+    try:
+        from core.db import is_available as _db_ok, get_subscribers
+        if _db_ok():
+            return get_subscribers()
+    except Exception as exc:
+        logger.warning("_load_subscribers: DB read failed, falling back to JSON — %s", exc)
+
+    # JSON fallback (local dev or DB unavailable)
     try:
         with open(_SUBSCRIBERS_PATH, encoding="utf-8") as f:
-            import json
             data = json.load(f)
             return [int(x) for x in data.get("subscribers", [])]
     except FileNotFoundError:
@@ -1385,8 +1471,26 @@ def _load_subscribers() -> list[int]:
 
 
 def _save_subscribers(subs: list[int]) -> None:
-    """Persist the subscriber list to JSON."""
-    import json
+    """Persist the subscriber list.
+
+    Writes to Postgres when available; also mirrors to JSON so local dev
+    and CSV-only deployments keep working.
+    """
+    # Postgres path (preferred on Railway — survives redeployments)
+    try:
+        from core.db import is_available as _db_ok, add_subscriber, remove_subscriber, get_subscribers
+        if _db_ok():
+            current = set(get_subscribers())
+            new_set = set(subs)
+            for uid in new_set - current:
+                add_subscriber(uid)
+            for uid in current - new_set:
+                remove_subscriber(uid)
+            return  # DB updated successfully; JSON file not needed
+    except Exception as exc:
+        logger.warning("_save_subscribers: DB write failed, falling back to JSON — %s", exc)
+
+    # JSON fallback
     try:
         with open(_SUBSCRIBERS_PATH, "w", encoding="utf-8") as f:
             json.dump({"subscribers": subs}, f)
@@ -4033,15 +4137,20 @@ async def autoscan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def matches_update_job(context: ContextTypes.DEFAULT_TYPE):
-    """Scheduled job (every 15 min): refresh today_matches.csv from API-Sports."""
+    """Scheduled job (every 15 min): refresh today + tomorrow fixtures from API-Sports."""
     global _last_csv_update
     if not _matches_lock.acquire(blocking=False):
         logger.debug("matches_update_job: skipped (another refresh in progress)")
         return
     try:
         update_matches()
+        _tomorrow_str = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+        try:
+            update_matches(date=_tomorrow_str, data_path=DATA_PATH_TOMORROW)
+        except Exception as exc:
+            logger.warning("matches_update_job: tomorrow update failed: %s", exc)
         _last_csv_update = _time.time()
-        logger.info("matches_update_job: CSV actualizado")
+        logger.info("matches_update_job: fixtures actualizados (hoy + mañana)")
     except Exception as exc:
         logger.warning("matches_update_job: error al actualizar partidos: %s", exc)
     finally:
@@ -4402,11 +4511,31 @@ def main():
     global _last_csv_update
     logger.info("🚀 Iniciando Sports Engine Bot…")
 
+    # ── Start HTTP health check server (required for Railway web process) ──
+    # Must be started before validate_config() so Railway sees the port binding
+    # immediately and doesn't time out waiting for the service to come up.
+    _start_health_server()
+
     validate_config()
 
     if not TELEGRAM_TOKEN:
         logger.error("TOKEN no está configurado. Saliendo.")
         sys.exit(1)
+
+    # ── DB bootstrap: create all tables if DATABASE_URL is configured ──
+    # This is idempotent (IF NOT EXISTS) so safe to call on every startup.
+    try:
+        from core.db import is_available as _db_available, ensure_table as _db_ensure_table
+        if _db_available():
+            logger.info("PostgreSQL: DATABASE_URL detectado — inicializando tablas…")
+            if _db_ensure_table():
+                logger.info("PostgreSQL: tablas listas ✓ (fixtures, bot_subscribers, tracked_markets)")
+            else:
+                logger.warning("PostgreSQL: ensure_table() falló — revisa los logs anteriores")
+        else:
+            logger.info("PostgreSQL: no configurado — modo CSV (configura DATABASE_URL para persistencia)")
+    except Exception as _db_exc:
+        logger.warning("PostgreSQL: error en bootstrap: %s", _db_exc)
 
     # Update today's matches (best-effort); record timestamp on success
     try:

@@ -1,5 +1,5 @@
 """
-PostgreSQL fixtures storage for Sports-Engine (Railway deployment).
+PostgreSQL storage for Sports-Engine (Railway deployment).
 
 Falls back gracefully when DATABASE_URL is absent or when psycopg is not
 installed, so local / CSV-only mode continues to work unchanged.
@@ -14,10 +14,11 @@ Usage
         upcoming = get_upcoming_fixtures(hours=24)
 """
 
+import json as _json
 import logging
 import os
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,37 @@ _DDL_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_fixtures_kickoff ON fixtures (kickoff_utc)",
     "CREATE INDEX IF NOT EXISTS idx_fixtures_status  ON fixtures (status_short)",
+]
+
+# ---------------------------------------------------------------------------
+# DDL — bot_subscribers table (persists /alertas subscriptions)
+# ---------------------------------------------------------------------------
+_DDL_SUBSCRIBERS = [
+    """
+    CREATE TABLE IF NOT EXISTS bot_subscribers (
+        user_id  BIGINT PRIMARY KEY,
+        added_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+]
+
+# ---------------------------------------------------------------------------
+# DDL — tracked_markets table (persists /addmarket entries)
+# ---------------------------------------------------------------------------
+_DDL_TRACKED_MARKETS = [
+    """
+    CREATE TABLE IF NOT EXISTS tracked_markets (
+        id         SERIAL PRIMARY KEY,
+        sport      TEXT        NOT NULL DEFAULT '',
+        event      TEXT        NOT NULL DEFAULT '',
+        market     TEXT        NOT NULL DEFAULT '',
+        player     TEXT        NOT NULL DEFAULT '',
+        odds_json  TEXT        NOT NULL DEFAULT '[]',
+        added_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT uq_tracked_market UNIQUE (event, market, player)
+    )
+    """,
 ]
 
 _UPSERT_SQL = """
@@ -139,19 +171,20 @@ def _connect():
 # ---------------------------------------------------------------------------
 
 def ensure_table() -> bool:
-    """Create the fixtures table and indices if they do not exist.
+    """Create ALL application tables and indices if they do not exist.
 
-    Safe to call multiple times (idempotent via IF NOT EXISTS).
+    Idempotent (IF NOT EXISTS) — safe to call on every startup.
     Returns True on success, False on failure.
     """
     if not is_available():
         return False
+    all_stmts = _DDL_STATEMENTS + _DDL_SUBSCRIBERS + _DDL_TRACKED_MARKETS
     try:
         with _connect() as conn:
             with conn.cursor() as cur:
-                for stmt in _DDL_STATEMENTS:
+                for stmt in all_stmts:
                     cur.execute(stmt)
-        logger.info("db.ensure_table: fixtures table ready")
+        logger.info("db.ensure_table: all tables ready (fixtures, bot_subscribers, tracked_markets)")
         return True
     except Exception as exc:
         logger.error("db.ensure_table failed: %s", exc)
@@ -283,3 +316,166 @@ def build_fixture_row(
         "kickoff_utc": kickoff_utc,
         "status_short": status_short,
     }
+
+
+# ---------------------------------------------------------------------------
+# Bot subscribers CRUD
+# ---------------------------------------------------------------------------
+
+def get_subscribers() -> List[int]:
+    """Return all subscribed chat_ids from Postgres.
+
+    Returns an empty list when DB is unavailable or on any error, so
+    callers can fall back to the JSON file without extra error-handling.
+    """
+    if not is_available():
+        return []
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id FROM bot_subscribers ORDER BY added_at")
+                return [row[0] for row in cur.fetchall()]
+    except Exception as exc:
+        logger.error("db.get_subscribers failed: %s", exc)
+        return []
+
+
+def add_subscriber(user_id: int) -> bool:
+    """Add a subscriber.  No-op if already present.  Returns True on success."""
+    if not is_available():
+        return False
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO bot_subscribers (user_id) VALUES (%s) ON CONFLICT DO NOTHING",
+                    (user_id,),
+                )
+        return True
+    except Exception as exc:
+        logger.error("db.add_subscriber failed: %s", exc)
+        return False
+
+
+def remove_subscriber(user_id: int) -> bool:
+    """Remove a subscriber.  Returns True on success (even if not found)."""
+    if not is_available():
+        return False
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM bot_subscribers WHERE user_id = %s",
+                    (user_id,),
+                )
+        return True
+    except Exception as exc:
+        logger.error("db.remove_subscriber failed: %s", exc)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Tracked markets CRUD
+# ---------------------------------------------------------------------------
+
+def get_tracked_markets_raw() -> List[dict]:
+    """Return all tracked markets as raw dicts (Postgres → JSON → odds_feed format).
+
+    Returns an empty list on error or when DB is unavailable.
+    """
+    if not is_available():
+        return []
+    try:
+        from psycopg.rows import dict_row
+        with _connect() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT sport, event, market, player, odds_json, "
+                    "       to_char(added_at, 'YYYY-MM-DD\"T\"HH24:MI:SS') AS added_at, "
+                    "       to_char(updated_at, 'YYYY-MM-DD\"T\"HH24:MI:SS') AS updated_at "
+                    "FROM tracked_markets ORDER BY added_at"
+                )
+                rows = cur.fetchall()
+        result = []
+        for row in rows:
+            try:
+                odds = _json.loads(row["odds_json"])
+            except Exception:
+                odds = []
+            result.append({
+                "sport":      row["sport"],
+                "event":      row["event"],
+                "market":     row["market"],
+                "player":     row["player"],
+                "odds":       odds,
+                "added_at":   row["added_at"],
+                "updated_at": row["updated_at"],
+            })
+        return result
+    except Exception as exc:
+        logger.error("db.get_tracked_markets_raw failed: %s", exc)
+        return []
+
+
+def save_tracked_market(
+    sport: str,
+    event: str,
+    market: str,
+    player: str,
+    odds: list,
+) -> bool:
+    """Upsert a tracked market.  Returns True on success."""
+    if not is_available():
+        return False
+    try:
+        odds_json = _json.dumps(odds, ensure_ascii=False)
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO tracked_markets (sport, event, market, player, odds_json, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (event, market, player) DO UPDATE SET
+                        sport      = EXCLUDED.sport,
+                        odds_json  = EXCLUDED.odds_json,
+                        updated_at = NOW()
+                    """,
+                    (sport, event, market, player, odds_json),
+                )
+        return True
+    except Exception as exc:
+        logger.error("db.save_tracked_market failed: %s", exc)
+        return False
+
+
+def remove_tracked_market(event: str, market: str, player: str = "") -> bool:
+    """Remove a specific tracked market.  Returns True on success."""
+    if not is_available():
+        return False
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM tracked_markets WHERE event = %s AND market = %s AND player = %s",
+                    (event, market, player),
+                )
+        return True
+    except Exception as exc:
+        logger.error("db.remove_tracked_market failed: %s", exc)
+        return False
+
+
+def clear_tracked_markets() -> int:
+    """Remove ALL tracked markets.  Returns count removed, or -1 on error."""
+    if not is_available():
+        return -1
+    try:
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM tracked_markets")
+                count = cur.fetchone()[0]
+                cur.execute("DELETE FROM tracked_markets")
+        return count
+    except Exception as exc:
+        logger.error("db.clear_tracked_markets failed: %s", exc)
+        return -1

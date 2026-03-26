@@ -1,5 +1,8 @@
 # ── Runtime dependencies ──────────────────────────────────────────────────────
-python-telegram-bot>=20.0
+# [job-queue] installs APScheduler so the background scheduler works.
+# Without it, app.job_queue is None and NO scheduled jobs run:
+# fixture refresh, daily alerts, and market scanner are all disabled.
+python-telegram-bot[job-queue]>=20.0
 python-dotenv
 requests
 psycopg[binary]>=3.1

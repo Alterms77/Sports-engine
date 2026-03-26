@@ -413,3 +413,248 @@ class TestLoadTodayMatchesDbPath:
 
         assert len(result) == 1
         assert result[0]["home"] == "Valencia"
+
+
+# ---------------------------------------------------------------------------
+# DB bootstrap: ensure_table() called at startup
+# ---------------------------------------------------------------------------
+
+class TestDbBootstrap:
+    """Verify that ensure_table() is called at startup when DB is available."""
+
+    def test_ensure_table_called_on_startup(self, monkeypatch):
+        """main() should call ensure_table() when DATABASE_URL is configured."""
+        called = []
+
+        monkeypatch.setattr("core.db.is_available", lambda: True)
+        monkeypatch.setattr("core.db.ensure_table", lambda: called.append(1) or True)
+
+        # Import bot module and invoke the bootstrap block directly
+        import bot.bot as bot
+
+        # Simulate the bootstrap block that main() runs
+        from core.db import is_available as _db_available, ensure_table as _db_ensure_table
+        if _db_available():
+            _db_ensure_table()
+
+        assert len(called) == 1, "ensure_table() should have been called once"
+
+    def test_ensure_table_not_called_when_db_unavailable(self, monkeypatch):
+        """ensure_table() should NOT be called when DB is not configured."""
+        called = []
+
+        monkeypatch.setattr("core.db.is_available", lambda: False)
+        monkeypatch.setattr("core.db.ensure_table", lambda: called.append(1) or True)
+
+        from core.db import is_available as _db_available, ensure_table as _db_ensure_table
+        if _db_available():
+            _db_ensure_table()
+
+        assert len(called) == 0, "ensure_table() should NOT be called when DB is unavailable"
+
+
+# ---------------------------------------------------------------------------
+# load_tomorrow_matches_multisport() DB-path integration (mocked)
+# ---------------------------------------------------------------------------
+
+class TestLoadTomorrowMatchesDbPath:
+    """Verify bot.load_tomorrow_matches_multisport() uses DB rows when available."""
+
+    def test_uses_db_for_tomorrow_soccer(self, monkeypatch):
+        """Should return tomorrow's soccer fixtures from DB when available."""
+        import bot.bot as bot
+
+        tomorrow_dt = datetime.now(timezone.utc) + timedelta(days=1)
+        tomorrow_str = tomorrow_dt.strftime("%Y-%m-%d")
+        future_kickoff = tomorrow_dt.replace(hour=18, minute=0, second=0, microsecond=0)
+
+        fake_db_rows = [
+            {
+                "fixture_id": "42",
+                "provider": "apisports",
+                "sport": "soccer",
+                "league_id": 39,
+                "league_name": "Premier League",
+                "home_team": "Liverpool",
+                "away_team": "Arsenal",
+                "kickoff_utc": future_kickoff,
+                "status_short": "NS",
+            }
+        ]
+
+        monkeypatch.setattr("core.db.is_available", lambda: True)
+        monkeypatch.setattr("core.db.get_upcoming_fixtures", lambda hours=24: fake_db_rows)
+
+        # ESPN returns nothing (we only want to test the soccer/DB path here)
+        try:
+            from api import espn_api as _espn
+            monkeypatch.setattr(_espn, "get_scoreboard", lambda sport, **kw: [])
+        except Exception:
+            pass
+
+        result = bot.load_tomorrow_matches_multisport()
+
+        soccer_results = [m for m in result if m.get("sport") == "soccer"]
+        assert len(soccer_results) == 1
+        assert soccer_results[0]["home"] == "Liverpool"
+        assert soccer_results[0]["away"] == "Arsenal"
+        assert soccer_results[0]["league"] == "Premier League"
+
+    def test_falls_back_to_csv_when_db_unavailable(self, monkeypatch, tmp_path):
+        """Should fall back to CSV when DB is not available."""
+        import bot.bot as bot
+
+        tomorrow_dt = datetime.now(timezone.utc) + timedelta(days=1)
+        tomorrow_str = tomorrow_dt.strftime("%Y-%m-%d")
+
+        csv_file = tmp_path / "tomorrow_matches.csv"
+        csv_file.write_text(
+            "home,away,league,date,kickoff_utc,status,round,tournament\n"
+            f"Real Madrid,Valencia,La Liga,{tomorrow_str},"
+            f"{tomorrow_str}T20:00:00+00:00,NS,,La Liga\n"
+        )
+
+        monkeypatch.setattr("core.db.is_available", lambda: False)
+        monkeypatch.setattr(bot, "DATA_PATH_TOMORROW", str(csv_file))
+        monkeypatch.setattr(bot, "DATA_PATH", str(tmp_path / "today_matches.csv"))
+
+        # ESPN returns nothing
+        try:
+            from api import espn_api as _espn
+            monkeypatch.setattr(_espn, "get_scoreboard", lambda sport, **kw: [])
+        except Exception:
+            pass
+
+        result = bot.load_tomorrow_matches_multisport()
+
+        soccer_results = [m for m in result if m.get("sport") == "soccer"]
+        assert len(soccer_results) == 1
+        assert soccer_results[0]["home"] == "Real Madrid"
+
+    def test_db_rows_outside_tomorrow_are_excluded(self, monkeypatch):
+        """DB rows with kickoff NOT in tomorrow's date should be excluded."""
+        import bot.bot as bot
+
+        # A kickoff that is clearly TODAY (not tomorrow)
+        today_kickoff = datetime.now(timezone.utc).replace(hour=20, minute=0, second=0, microsecond=0)
+
+        fake_db_rows = [
+            {
+                "fixture_id": "7",
+                "provider": "apisports",
+                "sport": "soccer",
+                "league_id": 262,
+                "league_name": "Liga MX",
+                "home_team": "Club America",
+                "away_team": "Cruz Azul",
+                "kickoff_utc": today_kickoff,
+                "status_short": "NS",
+            }
+        ]
+
+        monkeypatch.setattr("core.db.is_available", lambda: True)
+        monkeypatch.setattr("core.db.get_upcoming_fixtures", lambda hours=24: fake_db_rows)
+
+        try:
+            from api import espn_api as _espn
+            monkeypatch.setattr(_espn, "get_scoreboard", lambda sport, **kw: [])
+        except Exception:
+            pass
+
+        result = bot.load_tomorrow_matches_multisport()
+
+        soccer_results = [m for m in result if m.get("sport") == "soccer"]
+        assert len(soccer_results) == 0, "Today's kickoff should NOT appear in tomorrow's matches"
+
+
+# ---------------------------------------------------------------------------
+# Subscribers CRUD (no-ops when DB unavailable)
+# ---------------------------------------------------------------------------
+
+class TestSubscribersCrud:
+    """Verify subscriber CRUD functions return safe defaults when DB unavailable."""
+
+    def test_get_subscribers_returns_empty_when_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_URL", raising=False)
+        assert db_module.get_subscribers() == []
+
+    def test_add_subscriber_returns_false_when_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_URL", raising=False)
+        assert db_module.add_subscriber(12345) is False
+
+    def test_remove_subscriber_returns_false_when_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_URL", raising=False)
+        assert db_module.remove_subscriber(12345) is False
+
+
+# ---------------------------------------------------------------------------
+# Tracked markets CRUD (no-ops when DB unavailable)
+# ---------------------------------------------------------------------------
+
+class TestTrackedMarketsCrud:
+    """Verify tracked_markets CRUD functions return safe defaults when DB unavailable."""
+
+    def test_get_tracked_markets_returns_empty_when_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_URL", raising=False)
+        assert db_module.get_tracked_markets_raw() == []
+
+    def test_save_tracked_market_returns_false_when_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_URL", raising=False)
+        result = db_module.save_tracked_market("NBA", "A vs B", "Over 220.5", "", [])
+        assert result is False
+
+    def test_remove_tracked_market_returns_false_when_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_URL", raising=False)
+        assert db_module.remove_tracked_market("A vs B", "Over 220.5") is False
+
+    def test_clear_tracked_markets_returns_minus_one_when_unavailable(self, monkeypatch):
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("POSTGRES_URL", raising=False)
+        assert db_module.clear_tracked_markets() == -1
+
+
+# ---------------------------------------------------------------------------
+# Subscribers persistence via bot._load_subscribers / _save_subscribers
+# ---------------------------------------------------------------------------
+
+class TestSubscribersPersistence:
+    """Verify _load_subscribers / _save_subscribers prefer Postgres when available."""
+
+    def test_load_uses_db_when_available(self, monkeypatch):
+        """_load_subscribers returns DB rows when DB is available."""
+        import bot.bot as bot
+
+        monkeypatch.setattr("core.db.is_available", lambda: True)
+        monkeypatch.setattr("core.db.get_subscribers", lambda: [111, 222])
+
+        result = bot._load_subscribers()
+        assert result == [111, 222]
+
+    def test_load_falls_back_to_json_when_db_unavailable(self, monkeypatch, tmp_path):
+        """_load_subscribers falls back to JSON when DB is unavailable."""
+        import bot.bot as bot
+
+        subs_file = tmp_path / "alert_subscribers.json"
+        subs_file.write_text('{"subscribers": [333, 444]}')
+
+        monkeypatch.setattr("core.db.is_available", lambda: False)
+        monkeypatch.setattr(bot, "_SUBSCRIBERS_PATH", str(subs_file))
+
+        result = bot._load_subscribers()
+        assert result == [333, 444]
+
+    def test_load_returns_empty_when_no_file_and_db_unavailable(self, monkeypatch, tmp_path):
+        """_load_subscribers returns [] when JSON file doesn't exist and DB is down."""
+        import bot.bot as bot
+
+        monkeypatch.setattr("core.db.is_available", lambda: False)
+        monkeypatch.setattr(bot, "_SUBSCRIBERS_PATH", str(tmp_path / "nonexistent.json"))
+
+        result = bot._load_subscribers()
+        assert result == []

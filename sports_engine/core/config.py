@@ -323,6 +323,17 @@ def validate_config() -> bool:
         logger.error("TOKEN environment variable is not set")
         ok = False
 
+    # Report DATABASE_URL status so Railway logs make it clear whether Postgres is active
+    _db_url = os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
+    if _db_url:
+        logger.info("DATABASE_URL: configured ✓ (Postgres fixture storage enabled)")
+    else:
+        logger.warning(
+            "DATABASE_URL: NOT set — fixtures will be stored in CSV only. "
+            "Add a PostgreSQL plugin in Railway and link DATABASE_URL to enable "
+            "persistent fixture storage and avoid stale-data issues."
+        )
+
     # Report optional API key status so Railway logs make it clear what's available
     if API_SPORTS_KEY:
         logger.info("API_SPORTS_KEY: configured ✓ (live soccer fixtures enabled)")

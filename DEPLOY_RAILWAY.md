@@ -15,9 +15,11 @@ the bot could include already-finished matches in `/parlay` suggestions.
 
 With PostgreSQL the bot:
 
-1. **Upserts** every fixture (including finished ones) on each API refresh.
-2. **Queries only upcoming, not-started** fixtures when building parlays.
-3. Falls back to the CSV automatically when `DATABASE_URL` is not set (local
+1. **Auto-creates** the `fixtures` table on startup (idempotent — safe on
+   every deploy).
+2. **Upserts** every fixture (including finished ones) on each API refresh.
+3. **Queries only upcoming, not-started** fixtures when building parlays.
+4. Falls back to the CSV automatically when `DATABASE_URL` is not set (local
    development or if the DB is temporarily unavailable).
 
 ---
@@ -50,15 +52,18 @@ plugin's Variables tab and paste it manually into `worker → Variables`.
 
 ---
 
-## Step 3 — Verify
+## Step 3 — Required environment variables
 
-In `worker → Variables` you should now see:
+In your worker service Variables, make sure you have **all three**:
 
 ```
-DATABASE_URL = postgresql://user:password@postgres.railway.internal:5432/railway
+TOKEN            = <your Telegram Bot token>
+API_SPORTS_KEY   = <your API-Sports / API-Football key>
+DATABASE_URL     = postgresql://user:password@postgres.railway.internal:5432/railway
 ```
 
-The scheme may start with `postgres://` — the bot normalises it automatically.
+> `DATABASE_URL` is filled in automatically via the Variable Reference in
+> Step 2.  The scheme may start with `postgres://` — the bot normalises it.
 
 ---
 
@@ -67,10 +72,12 @@ The scheme may start with `postgres://` — the bot normalises it automatically.
 Trigger a new deployment of the **worker** service (Railway usually does this
 automatically when variables change). On startup the bot:
 
-1. Detects `DATABASE_URL` in the environment.
-2. Creates the `fixtures` table (and its indices) if it does not exist — no
-   manual SQL required.
-3. Upserts fixtures on every API refresh cycle.
+1. Detects `DATABASE_URL` in the environment and logs:
+   `PostgreSQL: DATABASE_URL detectado — inicializando tabla fixtures…`
+2. Creates the `fixtures` table (and its indices) if they do not exist — no
+   manual SQL required.  Logs: `PostgreSQL: tabla fixtures lista ✓`
+3. Fetches today's and tomorrow's fixtures from API-Sports and upserts them.
+4. Refreshes fixtures every 10 minutes in the background.
 
 You can confirm the table was created by opening the Railway Postgres plugin →
 **Data** tab and checking for the `fixtures` table.
@@ -81,10 +88,30 @@ You can confirm the table was created by opening the Railway Postgres plugin →
 
 | Variable | Required | Description |
 |---|---|---|
+| `TOKEN` | **Yes** | Telegram Bot API token. |
+| `API_SPORTS_KEY` | **Yes** | API-Sports / API-Football key for fetching live fixtures. |
 | `DATABASE_URL` | **Yes** (for Postgres) | Private connection string from Railway Postgres plugin. |
 | `DATABASE_PUBLIC_URL` | No | Public connection string — only needed for external tools (DBeaver, psql from your PC). Do **not** use in the bot. |
-| `API_SPORTS_KEY` | Yes | API-Sports / API-Football key for fetching live fixtures. |
-| `TELEGRAM_TOKEN` | Yes | Telegram Bot API token. |
+| `ALERTS_CHANNEL_ID` | No | Telegram channel ID for daily alert broadcasts. |
+| `ODDS_API_KEY` | No | The Odds API key for live bookmaker odds in the auto-scanner. |
+
+---
+
+## Startup log reference
+
+When everything is configured correctly you should see lines like these in
+Railway → Deployments → Logs:
+
+```
+DATABASE_URL: configured ✓ (Postgres fixture storage enabled)
+API_SPORTS_KEY: configured ✓ (live soccer fixtures enabled)
+PostgreSQL: DATABASE_URL detectado — inicializando tabla fixtures…
+PostgreSQL: tabla fixtures lista ✓
+update_matches: upserted 18 fixture(s) to Postgres (total for date: 18)
+```
+
+If you see `DATABASE_URL: NOT set` or `API_SPORTS_KEY: NOT set` in the logs,
+add the missing variable in Railway → Variables.
 
 ---
 
@@ -97,31 +124,13 @@ A small command-line tool is included to inspect the fixtures database:
 python sports_engine/db/fixtures_cli.py
 ```
 
-Sample output:
-
-```
-Sports-Engine Fixtures CLI
-======================================================================
-Database: connected ✓
-
-Upcoming not-started fixtures: 12
-
-Next 24 hours (3 fixture(s)):
-  [NS  ] Real Madrid               vs Barcelona              | La Liga                         | 2025-06-01 19:00 UTC
-  [NS  ] Manchester City            vs Arsenal                | Premier League                  | 2025-06-01 14:00 UTC
-  [NS  ] PSG                        vs Lyon                   | Ligue 1                         | 2025-06-01 20:00 UTC
-
-Latest finished fixtures (up to 10):
-  [FT  ] Atletico Madrid            vs Getafe                 | La Liga                         | 2025-05-31 19:00 UTC
-```
-
 ---
 
 ## How the DB prevents stale fixtures
 
 | Scenario | Behaviour |
 |---|---|
-| API refresh succeeds | All fixtures (pending + finished) are upserted. |
+| API refresh succeeds | All fixtures (pending + finished) are upserted. Periodic job refreshes today + tomorrow every 10 min. |
 | API refresh fails | DB retains fixtures from previous runs; finished ones remain marked `FT/AET/…` and are excluded from parlays. |
 | `DATABASE_URL` not set | Bot falls back to CSV mode (local dev behaviour). |
 | psycopg not installed | Same fallback — warning logged. |
@@ -141,3 +150,4 @@ pip install "psycopg[binary]>=3.1"
 export DATABASE_URL="postgresql://postgres:password@localhost:5432/sports_engine"
 python sports_engine/db/fixtures_cli.py
 ```
+
