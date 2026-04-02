@@ -203,11 +203,11 @@ def nba_player_props(
     """
 
     # NBA league averages used when live data is unavailable
-    _NBA_REB_AVG   = 44.0   # total team rebounds per game
-    _NBA_AST_AVG   = 26.0   # total team assists per game
-    _NBA_REB_BIG   = 0.24   # share of rebounds by starting center
-    _NBA_REB_WING  = 0.12   # share of rebounds by wing player
-    _NBA_AST_PG    = 0.42   # share of assists by primary ball-handler
+    _NBA_REB_AVG        = 44.0   # total team rebounds per game
+    _NBA_AST_AVG        = 26.0   # total team assists per game
+    _NBA_REB_BIG        = 0.24   # share of rebounds by starting center
+    _NBA_REB_WING       = 0.12   # share of rebounds by wing player
+    _NBA_PG_AST_SHARE   = 0.42   # share of team assists belonging to primary ball-handler
 
     def _team_props(ppg: float, reb_pg: float, ast_pg: float) -> dict:
         # Use live data when available; fall back to league-average scaling
@@ -217,7 +217,7 @@ def nba_player_props(
             "star_points":    round(ppg * _NBA_POS_SHARES["star_pts_pct"],   1),
             "2nd_scorer":     round(ppg * _NBA_POS_SHARES["2nd_scorer_pct"], 1),
             "role_player":    round(ppg * _NBA_POS_SHARES["role_pts_pct"],   1),
-            "assists":        round(ast_base * _NBA_AST_PG, 1),
+            "assists":        round(ast_base * _NBA_PG_AST_SHARE, 1),
             "rebounds_big":   round(reb_base * _NBA_REB_BIG,  1),
             "rebounds_wing":  round(reb_base * _NBA_REB_WING, 1),
             "team_rebounds":  round(reb_base, 1),
