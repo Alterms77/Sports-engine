@@ -49,6 +49,18 @@ ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4"
 SPORTRADAR_API_KEY: str = os.getenv("SPORTRADAR_API_KEY", "")
 SPORTRADAR_ACCESS: str = os.getenv("SPORTRADAR_ACCESS", "trial")
 
+# ── OpenAI ───────────────────────────────────────────────────────────────────
+# Used for:
+#   1. GPT-4o Vision OCR — reading parlay ticket photos (already in bot.py)
+#   2. GPT-4o-mini analysis — /analisis, /pregunta, /ai_picks commands
+# OPENAI_MODEL defaults to "gpt-4o-mini" (cost-efficient).  Override with
+# "gpt-4o" for higher quality at higher cost.
+OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+# Default model exposed as a constant so ai_analysis.py can reference it
+# without duplicating the string literal.
+OPENAI_MODEL_DEFAULT = "gpt-4o-mini"
+
 # ── Auto-scanner tuning ────────────────────────────────────────────────────────
 # Interval (seconds) between full auto-scan cycles. Default 300 s (5 min).
 # With the free Odds-API tier (500 req/month) a longer interval is recommended.
@@ -388,6 +400,17 @@ def validate_config() -> bool:
     else:
         logger.info(
             "ODDS_API_KEY: not set (optional — auto-scanner uses model-based odds)"
+        )
+
+    if OPENAI_API_KEY:
+        logger.info(
+            "OPENAI_API_KEY: configured ✓ (AI analysis enabled — model: %s)",
+            OPENAI_MODEL or "gpt-4o-mini",
+        )
+    else:
+        logger.info(
+            "OPENAI_API_KEY: not set (optional — /analisis, /pregunta, /ai_picks "
+            "will return a fallback message; parlay photo OCR also disabled)"
         )
 
     if ALERTS_CHANNEL_ID:
