@@ -233,6 +233,12 @@ def predict_game(home_name: str, away_name: str) -> dict:
     away_ppg = _extract_ppg(away_stats, NBA_AVG_PPG)
     away_oppg = _extract_oppg(away_stats, NBA_AVG_OPPG)
 
+    # Team rebounds and assists per game — used for live player prop estimates
+    home_reb_pg = float(home_stats.get("rebounds_pg") or 0.0)
+    away_reb_pg = float(away_stats.get("rebounds_pg") or 0.0)
+    home_ast_pg = float(home_stats.get("assists_pg")  or 0.0)
+    away_ast_pg = float(away_stats.get("assists_pg")  or 0.0)
+
     # ── Choose prediction model based on data availability ───────────────
     #
     # When Sportradar OffRtg/DefRtg/pace data is present, use the
@@ -316,7 +322,11 @@ def predict_game(home_name: str, away_name: str) -> dict:
     # ── Extended markets and player props ─────────────────────────────────────
     from core.props import nba_quarter_projections, nba_player_props, nba_game_totals
     quarters = nba_quarter_projections(expected_home, expected_away)
-    player_props = nba_player_props(home_ppg, away_ppg, home_name, away_name)
+    player_props = nba_player_props(
+        home_ppg, away_ppg, home_name, away_name,
+        home_reb=home_reb_pg, away_reb=away_reb_pg,
+        home_ast=home_ast_pg, away_ast=away_ast_pg,
+    )
     game_totals = nba_game_totals(expected_home, expected_away)
 
     return {

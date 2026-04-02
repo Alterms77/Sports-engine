@@ -173,6 +173,10 @@ def nba_player_props(
     away_ppg: float,
     home_name: str = "Local",
     away_name: str = "Visitante",
+    home_reb: float = 0.0,
+    away_reb: float = 0.0,
+    home_ast: float = 0.0,
+    away_ast: float = 0.0,
 ) -> dict:
     """
     Estimate player prop lines based on team PPG and positional archetypes.
@@ -191,25 +195,38 @@ def nba_player_props(
             "assists": float,         # primary ball-handler assists
             "rebounds_big": float,    # starting centre rebounds
             "rebounds_wing": float,
+            "team_rebounds": float,
+            "team_assists": float,
         },
         "away": { … same keys … }
     }
     """
 
-    def _team_props(ppg: float) -> dict:
-        scale = ppg / _NBA_AVG_PPG
+    # NBA league averages used when live data is unavailable
+    _NBA_REB_AVG        = 44.0   # total team rebounds per game
+    _NBA_AST_AVG        = 26.0   # total team assists per game
+    _NBA_REB_BIG        = 0.24   # share of rebounds by starting center
+    _NBA_REB_WING       = 0.12   # share of rebounds by wing player
+    _NBA_PG_AST_SHARE   = 0.42   # share of team assists belonging to primary ball-handler
+
+    def _team_props(ppg: float, reb_pg: float, ast_pg: float) -> dict:
+        # Use live data when available; fall back to league-average scaling
+        reb_base  = reb_pg  if reb_pg  > 0 else _NBA_REB_AVG  * (ppg / _NBA_AVG_PPG)
+        ast_base  = ast_pg  if ast_pg  > 0 else _NBA_AST_AVG  * (ppg / _NBA_AVG_PPG)
         return {
-            "star_points": round(ppg * _NBA_POS_SHARES["star_pts_pct"], 1),
-            "2nd_scorer": round(ppg * _NBA_POS_SHARES["2nd_scorer_pct"], 1),
-            "role_player": round(ppg * _NBA_POS_SHARES["role_pts_pct"], 1),
-            "assists": round(_NBA_AVG_AST_PG * scale * 0.42, 1),   # PG's share (~42%)
-            "rebounds_big": round(_NBA_POS_SHARES["big_reb_avg"] * scale, 1),
-            "rebounds_wing": round(_NBA_POS_SHARES["wing_reb_avg"] * scale, 1),
+            "star_points":    round(ppg * _NBA_POS_SHARES["star_pts_pct"],   1),
+            "2nd_scorer":     round(ppg * _NBA_POS_SHARES["2nd_scorer_pct"], 1),
+            "role_player":    round(ppg * _NBA_POS_SHARES["role_pts_pct"],   1),
+            "assists":        round(ast_base * _NBA_PG_AST_SHARE, 1),
+            "rebounds_big":   round(reb_base * _NBA_REB_BIG,  1),
+            "rebounds_wing":  round(reb_base * _NBA_REB_WING, 1),
+            "team_rebounds":  round(reb_base, 1),
+            "team_assists":   round(ast_base, 1),
         }
 
     return {
-        "home": _team_props(home_ppg),
-        "away": _team_props(away_ppg),
+        "home": _team_props(home_ppg, home_reb, home_ast),
+        "away": _team_props(away_ppg, away_reb, away_ast),
     }
 
 

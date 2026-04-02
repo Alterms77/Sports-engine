@@ -442,12 +442,28 @@ def _confidence_emoji(confidence: str) -> str:
     return {"ALTA": "🟢", "MEDIA": "🟡", "BAJA": "🔴"}.get(confidence, "⚪")
 
 
+def _md(text: str) -> str:
+    """Escape Telegram MarkdownV1 special characters in dynamic content.
+
+    Escapes ``_``, ``*``, backtick, and ``[`` so that user-supplied strings
+    (team names, league names, pick labels, etc.) never break the Markdown
+    entity parser and trigger a "Can't parse entities" error.
+    """
+    return (
+        str(text)
+        .replace("_", r"\_")
+        .replace("*", r"\*")
+        .replace("`", r"\`")
+        .replace("[", r"\[")
+    )
+
+
 def _best_pick(pred: dict) -> str:
     """Return a 'Best Pick' recommendation based on highest 1X2 probability."""
     options = {
-        f"Victoria {pred['home']}": pred["home_win"],
+        f"Victoria {_md(pred['home'])}": pred["home_win"],
         "Empate": pred["draw"],
-        f"Victoria {pred['away']}": pred["away_win"],
+        f"Victoria {_md(pred['away'])}": pred["away_win"],
     }
     best = max(options, key=options.get)
     return f"{best} ({options[best]:.1f}%)"
@@ -483,15 +499,17 @@ def format_prediction(pred: dict) -> str:
     league = pred.get("league", "")
     home = pred.get("home", "Local")
     away = pred.get("away", "Visitante")
-    home1 = home.split()[0]
-    away1 = away.split()[0]
+    home1 = _md(home.split()[0])
+    away1 = _md(away.split()[0])
+    home_md = _md(home)
+    away_md = _md(away)
 
     elo_home = pred.get("home_elo") or pred.get("elo_home", 1500)
     elo_away = pred.get("away_elo") or pred.get("elo_away", 1500)
-    league_line = f" {league}" if league and league != "default" else ""
+    league_line = f" {_md(league)}" if league and league != "default" else ""
 
     # ── Header box ──
-    title = f"⚽  {home}  vs  {away}"
+    title = f"⚽  {home_md}  vs  {away_md}"
     lines = [
         "╔══════════════════════════════════╗",
         f"  {title}",
@@ -572,7 +590,7 @@ def format_prediction(pred: dict) -> str:
         if _shot_picks:
             lines += ["🎯 *PICKS POR TIROS*", "━━━━━━━━━━━━━━━━━━━━"]
             for _sp in _shot_picks[:4]:   # cap at 4 to avoid clutter
-                lines.append(f"  ✅ {_sp['pick']}  _{_sp['reason']}_")
+                lines.append(f"  ✅ {_md(_sp['pick'])}  _{_md(_sp['reason'])}_")
             lines.append("")
 
     # ── Probabilities with visual bars ──
@@ -675,7 +693,7 @@ def format_prediction(pred: dict) -> str:
         lines += [
             "💡 *PICK ADICIONAL*",
             "━━━━━━━━━━━━━━━━━━━━",
-            f"  🔒 Victoria a cero: *{wtn['team']}*{value_tag}",
+            f"  🔒 Victoria a cero: *{_md(wtn['team'])}*{value_tag}",
             "",
         ]
 
@@ -693,11 +711,11 @@ def format_prediction(pred: dict) -> str:
         lines += [
             "🔱 *SHARP GAME — EDGE DETECTADO*",
             "━━━━━━━━━━━━━━━━━━━━",
-            f"  Pick: *{sharp['pick']}* ({sharp['pick_prob']:.1f}%)",
+            f"  Pick: *{_md(sharp['pick'])}* ({sharp['pick_prob']:.1f}%)",
             f"  Edge score: `{sharp['edge_score']}`",
         ]
         for reason in sharp.get("reasons", [])[:4]:
-            lines.append(f"  • {reason}")
+            lines.append(f"  • {_md(reason)}")
         lines.append("")
 
     # ── Best pick + confidence ──
@@ -717,7 +735,7 @@ def _live_source_badge(pred: dict) -> str:
         return ""
     names = {"sofascore": "SofaScore", "thesportsdb": "TheSportsDB", "espn": "ESPN"}
     pretty = names.get(source, source.capitalize())
-    return f"\n📡 _Forma en vivo: {pretty}_"
+    return f"\n📡 _Forma en vivo: {_md(pretty)}_"
 
 
 # ===============================
@@ -948,8 +966,8 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"_Actualizado: {ts_str}_")
         lines.append("")
         for m in football_matches:
-            league = f" _{m['league']}_" if m.get("league") else ""
-            lines.append(f"  • {m['home']} vs {m['away']}{league}")
+            league = f" _{_md(m['league'])}_" if m.get("league") else ""
+            lines.append(f"  • {_md(m['home'])} vs {_md(m['away'])}{league}")
         # Split into chunks of 50 matches to avoid Telegram limits
         chunk: list[str] = []
         header = lines[:3]  # title + timestamp + blank
@@ -993,11 +1011,11 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else ""
             )
             status = (
-                f" _{g['status']}_"
+                f" _{_md(g['status'])}_"
                 if g.get("status") and g["status"] not in ("Scheduled", "Pregame", "Pre-Game")
                 else ""
             )
-            lines.append(f"  • {g['home']} vs {g['away']}{score}{status}")
+            lines.append(f"  • {_md(g['home'])} vs {_md(g['away'])}{score}{status}")
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
     # ── Dispatch based on filter ────────────────────────────────────────────
@@ -1874,27 +1892,27 @@ def _format_sport_prediction(pred: dict) -> str:
     home_rec = f" `{pred['home_record']}`" if pred.get("home_record") else ""
     away_rec = f" `{pred['away_record']}`" if pred.get("away_record") else ""
 
-    lines = [f"*{sport}*", f"*{home}{home_rec}* vs *{away}{away_rec}*\n"]
+    lines = [f"*{sport}*", f"*{_md(home)}{home_rec}* vs *{_md(away)}{away_rec}*\n"]
 
     # Win probabilities
     lines.append("🏆 *Probabilidades*")
-    lines.append(f"  {home}: `{pred['home_win']:.1f}%`")
-    lines.append(f"  {away}: `{pred['away_win']:.1f}%`\n")
+    lines.append(f"  {_md(home)}: `{pred['home_win']:.1f}%`")
+    lines.append(f"  {_md(away)}: `{pred['away_win']:.1f}%`\n")
 
     # Sport-specific score/spread block
     if pred.get("expected_home") is not None:
         sport_key = sport.split()[0]
         if sport_key == "NBA":
             lines.append("🎯 *Marcador proyectado*")
-            lines.append(f"  {home}: `{pred['expected_home']:.0f}` pts")
-            lines.append(f"  {away}: `{pred['expected_away']:.0f}` pts")
+            lines.append(f"  {_md(home)}: `{pred['expected_home']:.0f}` pts")
+            lines.append(f"  {_md(away)}: `{pred['expected_away']:.0f}` pts")
             lines.append(f"  Over/Under: `{pred['over_under']}` pts")
             if pred.get("spread_str"):
                 lines.append(f"  Spread: `{pred['spread_str']}`")
             lines.append("")
             lines.append("📊 *Estadísticas de temporada*")
-            lines.append(f"  {home}: `{pred.get('home_ppg', '?')}` PPG / `{pred.get('home_oppg', '?')}` OPPG")
-            lines.append(f"  {away}: `{pred.get('away_ppg', '?')}` PPG / `{pred.get('away_oppg', '?')}` OPPG\n")
+            lines.append(f"  {_md(home)}: `{pred.get('home_ppg', '?')}` PPG / `{pred.get('home_oppg', '?')}` OPPG")
+            lines.append(f"  {_md(away)}: `{pred.get('away_ppg', '?')}` PPG / `{pred.get('away_oppg', '?')}` OPPG\n")
 
             # Quarter projections
             quarters = pred.get("quarter_projections")
@@ -1913,24 +1931,29 @@ def _format_sport_prediction(pred: dict) -> str:
                 home_pp = pp.get("home", {})
                 away_pp = pp.get("away", {})
                 lines.append("🎲 *Props de jugador (líneas estimadas)*")
-                lines.append(f"  📌 Estrella pts: {home} `{home_pp.get('star_points', '?')}` / {away} `{away_pp.get('star_points', '?')}`")
-                lines.append(f"  📌 2° anotador:  {home} `{home_pp.get('2nd_scorer', '?')}` / {away} `{away_pp.get('2nd_scorer', '?')}`")
-                lines.append(f"  🎯 Asistencias PG: {home} `{home_pp.get('assists', '?')}` / {away} `{away_pp.get('assists', '?')}`")
-                lines.append(f"  💪 Rebotes (C):  {home} `{home_pp.get('rebounds_big', '?')}` / {away} `{away_pp.get('rebounds_big', '?')}`")
-                lines.append(f"  🔄 Rebotes (ala): {home} `{home_pp.get('rebounds_wing', '?')}` / {away} `{away_pp.get('rebounds_wing', '?')}`")
+                # Show team-level totals first (from live data when available)
+                if home_pp.get("team_rebounds"):
+                    lines.append(f"  🔢 Rebotes equipo: {_md(home)} `{home_pp['team_rebounds']}` / {_md(away)} `{away_pp.get('team_rebounds', '?')}`")
+                if home_pp.get("team_assists"):
+                    lines.append(f"  🔢 Asist. equipo: {_md(home)} `{home_pp['team_assists']}` / {_md(away)} `{away_pp.get('team_assists', '?')}`")
+                lines.append(f"  📌 Estrella pts: {_md(home)} `{home_pp.get('star_points', '?')}` / {_md(away)} `{away_pp.get('star_points', '?')}`")
+                lines.append(f"  📌 2° anotador:  {_md(home)} `{home_pp.get('2nd_scorer', '?')}` / {_md(away)} `{away_pp.get('2nd_scorer', '?')}`")
+                lines.append(f"  🎯 Asistencias PG: {_md(home)} `{home_pp.get('assists', '?')}` / {_md(away)} `{away_pp.get('assists', '?')}`")
+                lines.append(f"  💪 Rebotes (C):  {_md(home)} `{home_pp.get('rebounds_big', '?')}` / {_md(away)} `{away_pp.get('rebounds_big', '?')}`")
+                lines.append(f"  🔄 Rebotes (ala): {_md(home)} `{home_pp.get('rebounds_wing', '?')}` / {_md(away)} `{away_pp.get('rebounds_wing', '?')}`")
                 lines.append("")
 
         elif sport_key == "NFL":
             lines.append("🎯 *Marcador proyectado*")
-            lines.append(f"  {home}: `{pred['expected_home']:.0f}` pts")
-            lines.append(f"  {away}: `{pred['expected_away']:.0f}` pts")
+            lines.append(f"  {_md(home)}: `{pred['expected_home']:.0f}` pts")
+            lines.append(f"  {_md(away)}: `{pred['expected_away']:.0f}` pts")
             lines.append(f"  Over/Under: `{pred['over_under']}` pts")
             if pred.get("spread_str"):
                 lines.append(f"  Spread: `{pred['spread_str']}`")
             lines.append("")
             lines.append("📊 *Estadísticas de temporada*")
-            lines.append(f"  {home}: `{pred.get('home_ppg', '?')}` PPG / `{pred.get('home_oppg', '?')}` OPPG")
-            lines.append(f"  {away}: `{pred.get('away_ppg', '?')}` PPG / `{pred.get('away_oppg', '?')}` OPPG\n")
+            lines.append(f"  {_md(home)}: `{pred.get('home_ppg', '?')}` PPG / `{pred.get('home_oppg', '?')}` OPPG")
+            lines.append(f"  {_md(away)}: `{pred.get('away_ppg', '?')}` PPG / `{pred.get('away_oppg', '?')}` OPPG\n")
 
             # Quarter projections
             quarters = pred.get("quarter_projections")
@@ -1949,31 +1972,54 @@ def _format_sport_prediction(pred: dict) -> str:
                 home_pp = pp.get("home", {})
                 away_pp = pp.get("away", {})
                 lines.append("🎲 *Props de jugador QB (líneas estimadas)*")
-                lines.append(f"  🏈 Yardas pase:  {home} `{home_pp.get('qb_pass_yards', '?'):.0f}` / {away} `{away_pp.get('qb_pass_yards', '?'):.0f}`")
-                lines.append(f"  🎯 TDs pase:      {home} `{home_pp.get('qb_pass_tds', '?')}` / {away} `{away_pp.get('qb_pass_tds', '?')}`")
-                lines.append(f"  ✅ Compleciones:  {home} `{home_pp.get('qb_completions', '?'):.0f}` / {away} `{away_pp.get('qb_completions', '?'):.0f}`")
-                lines.append(f"  🏃 Yardas tierra: {home} `{home_pp.get('rb_rush_yards', '?'):.0f}` / {away} `{away_pp.get('rb_rush_yards', '?'):.0f}`")
-                lines.append(f"  🏃 TDs tierra:    {home} `{home_pp.get('rb_rush_tds', '?')}` / {away} `{away_pp.get('rb_rush_tds', '?')}`")
-                lines.append(f"  🙌 Recepciones RB:{home} `{home_pp.get('rb_receptions', '?')}` / {away} `{away_pp.get('rb_receptions', '?')}`")
-                lines.append(f"  📡 Yardas WR1:    {home} `{home_pp.get('wr1_recv_yards', '?'):.0f}` / {away} `{away_pp.get('wr1_recv_yards', '?'):.0f}`")
-                lines.append(f"  📡 Recepciones WR:{home} `{home_pp.get('wr1_receptions', '?')}` / {away} `{away_pp.get('wr1_receptions', '?')}`")
-                lines.append(f"  🎯 TDs WR1:       {home} `{home_pp.get('wr1_recv_tds', '?')}` / {away} `{away_pp.get('wr1_recv_tds', '?')}`")
+                lines.append(f"  🏈 Yardas pase:  {_md(home)} `{home_pp.get('qb_pass_yards', '?'):.0f}` / {_md(away)} `{away_pp.get('qb_pass_yards', '?'):.0f}`")
+                lines.append(f"  🎯 TDs pase:      {_md(home)} `{home_pp.get('qb_pass_tds', '?')}` / {_md(away)} `{away_pp.get('qb_pass_tds', '?')}`")
+                lines.append(f"  ✅ Compleciones:  {_md(home)} `{home_pp.get('qb_completions', '?'):.0f}` / {_md(away)} `{away_pp.get('qb_completions', '?'):.0f}`")
+                lines.append(f"  🏃 Yardas tierra: {_md(home)} `{home_pp.get('rb_rush_yards', '?'):.0f}` / {_md(away)} `{away_pp.get('rb_rush_yards', '?'):.0f}`")
+                lines.append(f"  🏃 TDs tierra:    {_md(home)} `{home_pp.get('rb_rush_tds', '?')}` / {_md(away)} `{away_pp.get('rb_rush_tds', '?')}`")
+                lines.append(f"  🙌 Recepciones RB:{_md(home)} `{home_pp.get('rb_receptions', '?')}` / {_md(away)} `{away_pp.get('rb_receptions', '?')}`")
+                lines.append(f"  📡 Yardas WR1:    {_md(home)} `{home_pp.get('wr1_recv_yards', '?'):.0f}` / {_md(away)} `{away_pp.get('wr1_recv_yards', '?'):.0f}`")
+                lines.append(f"  📡 Recepciones WR:{_md(home)} `{home_pp.get('wr1_receptions', '?')}` / {_md(away)} `{away_pp.get('wr1_receptions', '?')}`")
+                lines.append(f"  🎯 TDs WR1:       {_md(home)} `{home_pp.get('wr1_recv_tds', '?')}` / {_md(away)} `{away_pp.get('wr1_recv_tds', '?')}`")
                 lines.append("")
 
         elif sport_key == "MLB":
             lines.append("🎯 *Carreras proyectadas*")
-            lines.append(f"  {home}: `{pred['expected_home']}` runs")
-            lines.append(f"  {away}: `{pred['expected_away']}` runs")
+            lines.append(f"  {_md(home)}: `{pred['expected_home']}` runs")
+            lines.append(f"  {_md(away)}: `{pred['expected_away']}` runs")
             lines.append(f"  Over/Under: `{pred['over_under']}` runs")
-            if pred.get("home_era"):
-                lines.append(f"  ERA pitcheo — {home}: `{pred['home_era']}` / {away}: `{pred.get('away_era', '?')}`")
+            # Pitcher info — show starter name + ERA/WHIP/K9 when available
+            home_p_name = pred.get("home_pitcher")
+            away_p_name = pred.get("away_pitcher")
+            if home_p_name or away_p_name or pred.get("home_era"):
+                lines.append("⚾ *Abridores probables*")
+                if home_p_name:
+                    h_era  = pred.get("home_pitcher_era",  pred.get("home_era",  "?"))
+                    h_whip = pred.get("home_pitcher_whip", "?")
+                    h_k9   = pred.get("home_pitcher_k9",   "?")
+                    era_s  = f"`{h_era:.2f}`"  if isinstance(h_era,  float) else f"`{h_era}`"
+                    whip_s = f"`{h_whip:.2f}`" if isinstance(h_whip, float) else f"`{h_whip}`"
+                    k9_s   = f"`{h_k9:.1f}`"  if isinstance(h_k9,   float) else f"`{h_k9}`"
+                    lines.append(f"  🏠 {_md(home)}: {_md(home_p_name)} — ERA {era_s} WHIP {whip_s} K/9 {k9_s}")
+                elif pred.get("home_era"):
+                    lines.append(f"  ERA pitcheo — {_md(home)}: `{pred['home_era']}`")
+                if away_p_name:
+                    a_era  = pred.get("away_pitcher_era",  pred.get("away_era",  "?"))
+                    a_whip = pred.get("away_pitcher_whip", "?")
+                    a_k9   = pred.get("away_pitcher_k9",   "?")
+                    era_s  = f"`{a_era:.2f}`"  if isinstance(a_era,  float) else f"`{a_era}`"
+                    whip_s = f"`{a_whip:.2f}`" if isinstance(a_whip, float) else f"`{a_whip}`"
+                    k9_s   = f"`{a_k9:.1f}`"  if isinstance(a_k9,   float) else f"`{a_k9}`"
+                    lines.append(f"  ✈️ {_md(away)}: {_md(away_p_name)} — ERA {era_s} WHIP {whip_s} K/9 {k9_s}")
+                elif pred.get("away_era"):
+                    lines.append(f"  ERA pitcheo — {_md(away)}: `{pred['away_era']}`")
 
             # Run line (MLB spread equivalent)
             rl = pred.get("run_line", {})
             if rl:
                 fav_side = rl.get("fav_side", "")
                 fav_name = home if fav_side == "home" else away
-                lines.append(f"  Run line (-1.5): `{fav_name}` cubre `{rl.get('cover_prob', '?')}%`")
+                lines.append(f"  Run line (-1.5): `{_md(fav_name)}` cubre `{rl.get('cover_prob', '?')}%`")
             lines.append("")
 
             # Player props
@@ -1982,10 +2028,10 @@ def _format_sport_prediction(pred: dict) -> str:
                 home_pp = pp.get("home", {})
                 away_pp = pp.get("away", {})
                 lines.append("🎲 *Props de jugador (líneas estimadas)*")
-                lines.append(f"  🎽 Hits equipo:    {home} `{home_pp.get('team_hits', '?')}` / {away} `{away_pp.get('team_hits', '?')}`")
-                lines.append(f"  ⚾ Hits cleanup:   {home} `{home_pp.get('cleanup_hits', '?')}` / {away} `{away_pp.get('cleanup_hits', '?')}`")
-                lines.append(f"  💣 HR cleanup:     {home} `{home_pp.get('cleanup_hr', '?')}` / {away} `{away_pp.get('cleanup_hr', '?')}`")
-                lines.append(f"  🔥 Ks abridor:     {home} `{home_pp.get('ace_strikeouts', '?')}` Ks / {away} `{away_pp.get('ace_strikeouts', '?')}` Ks")
+                lines.append(f"  🎽 Hits equipo:    {_md(home)} `{home_pp.get('team_hits', '?')}` / {_md(away)} `{away_pp.get('team_hits', '?')}`")
+                lines.append(f"  ⚾ Hits cleanup:   {_md(home)} `{home_pp.get('cleanup_hits', '?')}` / {_md(away)} `{away_pp.get('cleanup_hits', '?')}`")
+                lines.append(f"  💣 HR cleanup:     {_md(home)} `{home_pp.get('cleanup_hr', '?')}` / {_md(away)} `{away_pp.get('cleanup_hr', '?')}`")
+                lines.append(f"  🔥 Ks abridor:     {_md(home)} `{home_pp.get('ace_strikeouts', '?')}` Ks / {_md(away)} `{away_pp.get('ace_strikeouts', '?')}` Ks")
                 lines.append("")
 
     # Tennis-specific
@@ -1993,10 +2039,10 @@ def _format_sport_prediction(pred: dict) -> str:
         lines.append(f"🎾 *Superficie:* {pred.get('surface', 'hard').capitalize()}")
         lines.append(f"📏 *Formato:* Mejor de {pred.get('best_of', 3)}")
         lines.append(f"📊 *Elo aproximado*")
-        lines.append(f"  {home}: `{pred.get('elo_p1', '?')}`")
-        lines.append(f"  {away}: `{pred.get('elo_p2', '?')}`\n")
+        lines.append(f"  {_md(home)}: `{pred.get('elo_p1', '?')}`")
+        lines.append(f"  {_md(away)}: `{pred.get('elo_p2', '?')}`\n")
 
-    lines.append(f"💡 *Mejor Pick:* {pred['best_bet']}")
+    lines.append(f"💡 *Mejor Pick:* {_md(pred['best_bet'])}")
     lines.append(f"{conf_emoji} *Confianza:* {conf}")
     lines.append(live_note)
 
@@ -2547,7 +2593,7 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reasons_short = ", ".join(nm.get("reasons", [])[:2])
             near_miss_lines.append(
                 f"  • {_md_escape(nm.get('event_name', 'Partido'))} "
-                f"({nm.get('p_best_raw', 0):.0f}%) — _{reasons_short}_"
+                f"({nm.get('p_best_raw', 0):.0f}%) — _{_md(reasons_short)}_"
             )
         near_miss_text = (
             "\n\n*Picks casi incluidos:*\n" + "\n".join(near_miss_lines)
@@ -2824,37 +2870,127 @@ async def parlay_dream_command(update: Update, context: ContextTypes.DEFAULT_TYP
 # ── Parlay photo / text analyzer ─────────────────────────────────────────────
 
 
+def _extract_text_from_image_openai(image_bytes: bytes) -> str:
+    """Use OpenAI GPT-4 Vision to extract parlay legs from a ticket image.
+
+    Requires ``OPENAI_API_KEY`` environment variable.  Returns the raw text
+    extracted by the model (one leg per line) or raises on any error.
+    """
+    import base64
+    import json
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not configured")
+
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+    import requests as _req
+    payload = {
+        "model": "gpt-4o",
+        "max_tokens": 500,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "This is a sports betting parlay ticket. "
+                            "Extract each leg of the parlay and output one leg per line "
+                            "in this exact format:\n"
+                            "Team A vs Team B | Pick/Market | @Odds\n\n"
+                            "Examples:\n"
+                            "Lakers vs Celtics | Lakers ML | @1.85\n"
+                            "Real Madrid vs Barcelona | Over 2.5 Goals | @1.72\n"
+                            "Chiefs vs Eagles | Chiefs -3.5 | @1.90\n\n"
+                            "Output ONLY the legs, one per line. No extra text."
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                    },
+                ],
+            }
+        ],
+    }
+    resp = _req.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data["choices"][0]["message"]["content"].strip()
+
+
 async def photo_parlay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle photos sent to the bot as parlay ticket images.
 
-    The bot reads the photo's *caption* and parses it as parlay legs text.
-    If no caption is provided, usage instructions are returned.
-
-    Caption format (one leg per line):
-        Burnley vs Bournemouth | Over 2.5 | @1.75
-        Lakers vs Warriors | Moneyline | @2.10
-        Real Madrid vs Barcelona | Victoria Real Madrid | 1.45
+    Strategy (in order of preference):
+    1. If the photo has a *caption*, parse the caption directly.
+    2. If ``OPENAI_API_KEY`` is set, download the photo and use GPT-4o Vision
+       to extract the parlay legs from the image automatically.
+    3. Otherwise, reply with format instructions asking the user to re-send
+       with a text caption.
     """
+    from core.parlay_analyzer import (
+        parse_parlay_text,
+        analyze_parlay,
+        format_parlay_analysis,
+        USAGE_TEXT,
+    )
+
     caption = (update.message.caption or "").strip()
+    text_to_parse = caption
 
-    if not caption:
-        from core.parlay_analyzer import USAGE_TEXT
-        await update.message.reply_text(USAGE_TEXT, parse_mode="MarkdownV2")
-        return
+    # ── If no caption, try to read the image directly ─────────────────────
+    if not text_to_parse:
+        openai_key = os.environ.get("OPENAI_API_KEY", "")
+        if not openai_key:
+            # No caption, no vision API — ask the user to add a caption
+            await update.message.reply_text(
+                "📸 *Cómo analizar tu parlay*\n\n"
+                "Envía la foto *con un caption* describiendo cada pata, "
+                "o activa la lectura automática de imágenes configurando "
+                "`OPENAI_API_KEY` en las variables de entorno del bot.\n\n"
+                "*Formato del caption (una pata por línea):*\n"
+                "`Lakers vs Celtics | Lakers ML | @1.85`\n"
+                "`Real Madrid vs Barcelona | Over 2.5 | @1.72`\n"
+                "`Chiefs vs Eagles | Chiefs -3.5 | @1.90`\n\n"
+                "O usa el comando: `/checkparlay <patas>`",
+                parse_mode="Markdown",
+            )
+            return
 
-    await update.message.reply_text("🔍 Analizando tu parlay…", parse_mode="Markdown")
+        # Download the largest available photo size
+        await update.message.reply_text("🔍 Leyendo imagen del ticket…", parse_mode="Markdown")
+        try:
+            photo_file = await update.message.photo[-1].get_file()
+            import io
+            buf = io.BytesIO()
+            await photo_file.download_to_memory(buf)
+            image_bytes = buf.getvalue()
+            text_to_parse = _extract_text_from_image_openai(image_bytes)
+            logger.info("GPT-4o Vision extracted %d chars from parlay image", len(text_to_parse))
+        except Exception as exc:
+            logger.warning("Photo OCR failed: %s", exc)
+            await update.message.reply_text(
+                "❌ No pude leer la imagen automáticamente.\n\n"
+                "Por favor reenvía la foto *con un caption* listando cada pata:\n"
+                "`Equipo A vs Equipo B | Pick | @Cuota`",
+                parse_mode="Markdown",
+            )
+            return
+    else:
+        await update.message.reply_text("🔍 Analizando tu parlay…", parse_mode="Markdown")
 
+    # ── Parse and analyse the extracted / caption text ────────────────────
     try:
-        from core.parlay_analyzer import (
-            parse_parlay_text,
-            analyze_parlay,
-            format_parlay_analysis,
-            USAGE_TEXT,
-        )
-        legs = parse_parlay_text(caption)
+        legs = parse_parlay_text(text_to_parse)
         if not legs:
             await update.message.reply_text(
-                "❌ No pude detectar patas de parlay en el caption.\n\n"
+                "❌ No pude detectar patas de parlay en el texto extraído.\n\n"
                 + USAGE_TEXT,
                 parse_mode="Markdown",
             )

@@ -267,14 +267,48 @@ def predict_game(home_name: str, away_name: str) -> dict:
     away_era = away_era_used
     home_era = home_era_used
 
-    if away_era_used:
-        pitcher_adj = league_era / max(away_era_used, 0.5)
-        xr_home = round(xr_home * pitcher_adj, 2)
+    # ── Composite pitcher quality adjustment ─────────────────────────────────
+    # Weight ERA (60 %), WHIP (25 %), and K/9 (15 %) into a single multiplier.
+    # K/9 > league avg (9.0) means more strikeouts → fewer balls in play → fewer runs.
+    league_whip  = 1.30   # MLB league average WHIP (2023-24)
+    league_k9    = 9.0    # MLB league average K/9
+
+    def _pitcher_quality_adj(era: float | None, whip: float | None, k9: float | None) -> float:
+        """Return a run-scoring multiplier for batters facing this pitcher.
+
+        < 1.0 for elite pitchers (batters score fewer runs than average).
+        > 1.0 for below-average pitchers (batters score more runs).
+        = 1.0 when all stats equal league average.
+
+        Formula (weighted average):
+          ERA  component: era  / league_era   (< 1 for elite ERA)
+          WHIP component: whip / league_whip  (< 1 for elite WHIP)
+          K/9  component: league_k9 / k9      (< 1 when pitcher strikes out more)
+        Weights: ERA 60 %, WHIP 25 %, K/9 15 %.
+        """
+        era_adj  = (max(era,  0.50) / league_era)  if era  else 1.0
+        whip_adj = (max(whip, 0.10) / league_whip) if whip else 1.0
+        k9_adj   = (league_k9 / max(k9, 1.0))      if k9  else 1.0
+        raw = 0.60 * era_adj + 0.25 * whip_adj + 0.15 * k9_adj
+        # Cap between 0.40 and 1.60 to prevent extreme outlier distortion
+        return round(max(0.40, min(raw, 1.60)), 4)
+
+    if away_pitcher_info or away_era_used:
+        adj = _pitcher_quality_adj(
+            away_era_used,
+            (away_pitcher_info or {}).get("whip"),
+            (away_pitcher_info or {}).get("k_per_9"),
+        )
+        xr_home = round(xr_home * adj, 2)
         if away_pitcher_info and away_pitcher_info.get("era"):
             starter_era_used = True
-    if home_era_used:
-        pitcher_adj = league_era / max(home_era_used, 0.5)
-        xr_away = round(xr_away * pitcher_adj, 2)
+    if home_pitcher_info or home_era_used:
+        adj = _pitcher_quality_adj(
+            home_era_used,
+            (home_pitcher_info or {}).get("whip"),
+            (home_pitcher_info or {}).get("k_per_9"),
+        )
+        xr_away = round(xr_away * adj, 2)
         if home_pitcher_info and home_pitcher_info.get("era"):
             starter_era_used = True
 
@@ -334,6 +368,20 @@ def predict_game(home_name: str, away_name: str) -> dict:
         # False otherwise. Used by score_risk_mlb to assess data quality.
         "pitcher_home": home_era is not None,
         "pitcher_away": away_era is not None,
+        # Starting pitcher display info (name + key stats when available)
+        "home_pitcher": (
+            home_pitcher_info.get("name") if home_pitcher_info else None
+        ),
+        "away_pitcher": (
+            away_pitcher_info.get("name") if away_pitcher_info else None
+        ),
+        "home_pitcher_era":  (home_pitcher_info or {}).get("era"),
+        "home_pitcher_whip": (home_pitcher_info or {}).get("whip"),
+        "home_pitcher_k9":   (home_pitcher_info or {}).get("k_per_9"),
+        "away_pitcher_era":  (away_pitcher_info or {}).get("era"),
+        "away_pitcher_whip": (away_pitcher_info or {}).get("whip"),
+        "away_pitcher_k9":   (away_pitcher_info or {}).get("k_per_9"),
+        "starter_era_used":  starter_era_used,
         "player_props": player_props,
         "run_line": run_line,
     }
