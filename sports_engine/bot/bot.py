@@ -442,12 +442,28 @@ def _confidence_emoji(confidence: str) -> str:
     return {"ALTA": "🟢", "MEDIA": "🟡", "BAJA": "🔴"}.get(confidence, "⚪")
 
 
+def _md(text: str) -> str:
+    """Escape Telegram MarkdownV1 special characters in dynamic content.
+
+    Escapes ``_``, ``*``, backtick, and ``[`` so that user-supplied strings
+    (team names, league names, pick labels, etc.) never break the Markdown
+    entity parser and trigger a "Can't parse entities" error.
+    """
+    return (
+        str(text)
+        .replace("_", r"\_")
+        .replace("*", r"\*")
+        .replace("`", r"\`")
+        .replace("[", r"\[")
+    )
+
+
 def _best_pick(pred: dict) -> str:
     """Return a 'Best Pick' recommendation based on highest 1X2 probability."""
     options = {
-        f"Victoria {pred['home']}": pred["home_win"],
+        f"Victoria {_md(pred['home'])}": pred["home_win"],
         "Empate": pred["draw"],
-        f"Victoria {pred['away']}": pred["away_win"],
+        f"Victoria {_md(pred['away'])}": pred["away_win"],
     }
     best = max(options, key=options.get)
     return f"{best} ({options[best]:.1f}%)"
@@ -483,15 +499,17 @@ def format_prediction(pred: dict) -> str:
     league = pred.get("league", "")
     home = pred.get("home", "Local")
     away = pred.get("away", "Visitante")
-    home1 = home.split()[0]
-    away1 = away.split()[0]
+    home1 = _md(home.split()[0])
+    away1 = _md(away.split()[0])
+    home_md = _md(home)
+    away_md = _md(away)
 
     elo_home = pred.get("home_elo") or pred.get("elo_home", 1500)
     elo_away = pred.get("away_elo") or pred.get("elo_away", 1500)
-    league_line = f" {league}" if league and league != "default" else ""
+    league_line = f" {_md(league)}" if league and league != "default" else ""
 
     # ── Header box ──
-    title = f"⚽  {home}  vs  {away}"
+    title = f"⚽  {home_md}  vs  {away_md}"
     lines = [
         "╔══════════════════════════════════╗",
         f"  {title}",
@@ -572,7 +590,7 @@ def format_prediction(pred: dict) -> str:
         if _shot_picks:
             lines += ["🎯 *PICKS POR TIROS*", "━━━━━━━━━━━━━━━━━━━━"]
             for _sp in _shot_picks[:4]:   # cap at 4 to avoid clutter
-                lines.append(f"  ✅ {_sp['pick']}  _{_sp['reason']}_")
+                lines.append(f"  ✅ {_md(_sp['pick'])}  _{_md(_sp['reason'])}_")
             lines.append("")
 
     # ── Probabilities with visual bars ──
@@ -675,7 +693,7 @@ def format_prediction(pred: dict) -> str:
         lines += [
             "💡 *PICK ADICIONAL*",
             "━━━━━━━━━━━━━━━━━━━━",
-            f"  🔒 Victoria a cero: *{wtn['team']}*{value_tag}",
+            f"  🔒 Victoria a cero: *{_md(wtn['team'])}*{value_tag}",
             "",
         ]
 
@@ -693,11 +711,11 @@ def format_prediction(pred: dict) -> str:
         lines += [
             "🔱 *SHARP GAME — EDGE DETECTADO*",
             "━━━━━━━━━━━━━━━━━━━━",
-            f"  Pick: *{sharp['pick']}* ({sharp['pick_prob']:.1f}%)",
+            f"  Pick: *{_md(sharp['pick'])}* ({sharp['pick_prob']:.1f}%)",
             f"  Edge score: `{sharp['edge_score']}`",
         ]
         for reason in sharp.get("reasons", [])[:4]:
-            lines.append(f"  • {reason}")
+            lines.append(f"  • {_md(reason)}")
         lines.append("")
 
     # ── Best pick + confidence ──
@@ -717,7 +735,7 @@ def _live_source_badge(pred: dict) -> str:
         return ""
     names = {"sofascore": "SofaScore", "thesportsdb": "TheSportsDB", "espn": "ESPN"}
     pretty = names.get(source, source.capitalize())
-    return f"\n📡 _Forma en vivo: {pretty}_"
+    return f"\n📡 _Forma en vivo: {_md(pretty)}_"
 
 
 # ===============================
