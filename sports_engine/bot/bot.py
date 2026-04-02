@@ -2870,37 +2870,127 @@ async def parlay_dream_command(update: Update, context: ContextTypes.DEFAULT_TYP
 # ── Parlay photo / text analyzer ─────────────────────────────────────────────
 
 
+def _extract_text_from_image_openai(image_bytes: bytes) -> str:
+    """Use OpenAI GPT-4 Vision to extract parlay legs from a ticket image.
+
+    Requires ``OPENAI_API_KEY`` environment variable.  Returns the raw text
+    extracted by the model (one leg per line) or raises on any error.
+    """
+    import base64
+    import json
+    api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY not configured")
+
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+    import requests as _req
+    payload = {
+        "model": "gpt-4o",
+        "max_tokens": 500,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "This is a sports betting parlay ticket. "
+                            "Extract each leg of the parlay and output one leg per line "
+                            "in this exact format:\n"
+                            "Team A vs Team B | Pick/Market | @Odds\n\n"
+                            "Examples:\n"
+                            "Lakers vs Celtics | Lakers ML | @1.85\n"
+                            "Real Madrid vs Barcelona | Over 2.5 Goals | @1.72\n"
+                            "Chiefs vs Eagles | Chiefs -3.5 | @1.90\n\n"
+                            "Output ONLY the legs, one per line. No extra text."
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                    },
+                ],
+            }
+        ],
+    }
+    resp = _req.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json=payload,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data["choices"][0]["message"]["content"].strip()
+
+
 async def photo_parlay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle photos sent to the bot as parlay ticket images.
 
-    The bot reads the photo's *caption* and parses it as parlay legs text.
-    If no caption is provided, usage instructions are returned.
-
-    Caption format (one leg per line):
-        Burnley vs Bournemouth | Over 2.5 | @1.75
-        Lakers vs Warriors | Moneyline | @2.10
-        Real Madrid vs Barcelona | Victoria Real Madrid | 1.45
+    Strategy (in order of preference):
+    1. If the photo has a *caption*, parse the caption directly.
+    2. If ``OPENAI_API_KEY`` is set, download the photo and use GPT-4o Vision
+       to extract the parlay legs from the image automatically.
+    3. Otherwise, reply with format instructions asking the user to re-send
+       with a text caption.
     """
+    from core.parlay_analyzer import (
+        parse_parlay_text,
+        analyze_parlay,
+        format_parlay_analysis,
+        USAGE_TEXT,
+    )
+
     caption = (update.message.caption or "").strip()
+    text_to_parse = caption
 
-    if not caption:
-        from core.parlay_analyzer import USAGE_TEXT
-        await update.message.reply_text(USAGE_TEXT, parse_mode="MarkdownV2")
-        return
+    # ── If no caption, try to read the image directly ─────────────────────
+    if not text_to_parse:
+        openai_key = os.environ.get("OPENAI_API_KEY", "")
+        if not openai_key:
+            # No caption, no vision API — ask the user to add a caption
+            await update.message.reply_text(
+                "📸 *Cómo analizar tu parlay*\n\n"
+                "Envía la foto *con un caption* describiendo cada pata, "
+                "o activa la lectura automática de imágenes configurando "
+                "`OPENAI_API_KEY` en las variables de entorno del bot.\n\n"
+                "*Formato del caption (una pata por línea):*\n"
+                "`Lakers vs Celtics | Lakers ML | @1.85`\n"
+                "`Real Madrid vs Barcelona | Over 2.5 | @1.72`\n"
+                "`Chiefs vs Eagles | Chiefs -3.5 | @1.90`\n\n"
+                "O usa el comando: `/checkparlay <patas>`",
+                parse_mode="Markdown",
+            )
+            return
 
-    await update.message.reply_text("🔍 Analizando tu parlay…", parse_mode="Markdown")
+        # Download the largest available photo size
+        await update.message.reply_text("🔍 Leyendo imagen del ticket…", parse_mode="Markdown")
+        try:
+            photo_file = await update.message.photo[-1].get_file()
+            import io
+            buf = io.BytesIO()
+            await photo_file.download_to_memory(buf)
+            image_bytes = buf.getvalue()
+            text_to_parse = _extract_text_from_image_openai(image_bytes)
+            logger.info("GPT-4o Vision extracted %d chars from parlay image", len(text_to_parse))
+        except Exception as exc:
+            logger.warning("Photo OCR failed: %s", exc)
+            await update.message.reply_text(
+                "❌ No pude leer la imagen automáticamente.\n\n"
+                "Por favor reenvía la foto *con un caption* listando cada pata:\n"
+                "`Equipo A vs Equipo B | Pick | @Cuota`",
+                parse_mode="Markdown",
+            )
+            return
+    else:
+        await update.message.reply_text("🔍 Analizando tu parlay…", parse_mode="Markdown")
 
+    # ── Parse and analyse the extracted / caption text ────────────────────
     try:
-        from core.parlay_analyzer import (
-            parse_parlay_text,
-            analyze_parlay,
-            format_parlay_analysis,
-            USAGE_TEXT,
-        )
-        legs = parse_parlay_text(caption)
+        legs = parse_parlay_text(text_to_parse)
         if not legs:
             await update.message.reply_text(
-                "❌ No pude detectar patas de parlay en el caption.\n\n"
+                "❌ No pude detectar patas de parlay en el texto extraído.\n\n"
                 + USAGE_TEXT,
                 parse_mode="Markdown",
             )
