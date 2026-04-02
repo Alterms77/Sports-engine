@@ -1299,14 +1299,18 @@ def _build_dream_bundle(pred: dict) -> dict | None:
     dr = float(pred.get("draw")     or 0.0)
 
     # ── Determine the story direction ────────────────────────────────────────
-    if hw >= aw and hw >= dr and hw >= 52.0:
+    # Pick the direction with the strictly highest win probability.
+    # Using >= for away (instead of strictly >) so that when hw == aw
+    # (exactly equal), away gets selected — breaking the systematic
+    # home-team bias caused by the built-in home-advantage boost.
+    if hw > aw and hw > dr and hw >= 52.0:
         winner_direction = "home"
         winner_name      = home
-        ml_pick = next((c for c in candidates if f"Victoria {home}" in c["pick"]), None)
-    elif aw > hw and aw >= dr and aw >= 52.0:
+        ml_pick = next((c for c in candidates if c["pick"] == f"Victoria {home}"), None)
+    elif aw >= hw and aw > dr and aw >= 52.0:
         winner_direction = "away"
         winner_name      = away
-        ml_pick = next((c for c in candidates if f"Victoria {away}" in c["pick"]), None)
+        ml_pick = next((c for c in candidates if c["pick"] == f"Victoria {away}"), None)
     elif dr >= 40.0:
         winner_direction = "draw"
         winner_name      = None
@@ -1388,10 +1392,8 @@ def _build_dream_bundle(pred: dict) -> dict | None:
 
     elif "nba" in sport:
         total_pts = float(pred.get("over_under") or 0.0)
-        # Include game total when there is ANY real probability edge above 50 %
-        # (the raw game_total vs the rounded line provides a natural 0–2 % edge)
         totals_cands = [c for c in candidates
-                        if c["market_type"] == "totals" and c["prob"] > 50.0]
+                        if c["market_type"] == "totals" and c["prob"] >= 55.0]
         if totals_cands:
             selected.append(max(totals_cands, key=lambda c: c["prob"]))
         narrative = _nba_narrative(home, away, winner_name, total_pts)
@@ -1401,27 +1403,24 @@ def _build_dream_bundle(pred: dict) -> dict | None:
         if run_line and isinstance(run_line, dict):
             cov = float(run_line.get("cover_prob") or 0.0)
             fav = run_line.get("fav_side", "")
-            # Run line coherent only when it aligns with the moneyline direction
             rl_aligns = (
                 (fav == "home" and winner_direction == "home") or
                 (fav == "away" and winner_direction == "away")
             )
-            if cov >= 52.0 and fav and rl_aligns:
+            if cov >= 55.0 and fav and rl_aligns:
                 rl_label = f"{home} -1.5" if fav == "home" else f"{away} -1.5"
                 selected.append({"pick": rl_label, "prob": round(cov, 1),
                                   "market_type": "spread"})
-        # Runs O/U from candidates — only when there is a real edge (≥ 52 %)
         totals_cands = [c for c in candidates
-                        if c["market_type"] == "totals" and c["prob"] >= 52.0]
+                        if c["market_type"] == "totals" and c["prob"] >= 55.0]
         if totals_cands:
             selected.append(max(totals_cands, key=lambda c: c["prob"]))
         narrative = _generic_narrative(home, away, winner_name)
 
     elif "nfl" in sport:
         total_pts = float(pred.get("over_under") or 0.0)
-        # Include game total when there is ANY real probability edge above 50 %
         totals_cands = [c for c in candidates
-                        if c["market_type"] == "totals" and c["prob"] > 50.0]
+                        if c["market_type"] == "totals" and c["prob"] >= 55.0]
         if totals_cands:
             selected.append(max(totals_cands, key=lambda c: c["prob"]))
         narrative = _generic_narrative(home, away, winner_name)

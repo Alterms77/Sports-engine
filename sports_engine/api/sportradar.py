@@ -261,6 +261,10 @@ def get_nba_team_stats(team_name: str) -> dict:
 
         ppg  = float(avg.get("points",     0.0) or 0.0)
         oppg = float(avg.get("opp_points", 0.0) or 0.0)
+        rebounds_pg = float(avg.get("rebounds", 0.0) or 0.0)
+        assists_pg  = float(avg.get("assists",  0.0) or 0.0)
+        steals_pg   = float(avg.get("steals",   0.0) or 0.0)
+        blocks_pg   = float(avg.get("blocks",   0.0) or 0.0)
 
         off_rtg = float(adv.get("offensive_rating") or 0.0)
         def_rtg = float(adv.get("defensive_rating") or 0.0)
@@ -273,8 +277,12 @@ def get_nba_team_stats(team_name: str) -> dict:
         win_pct = round(wins / total, 3) if total else 0.5
 
         result: dict = {
-            "ppg":     round(ppg,  1),
-            "oppg":    round(oppg, 1),
+            "ppg":          round(ppg,          1),
+            "oppg":         round(oppg,         1),
+            "rebounds_pg":  round(rebounds_pg,  1),
+            "assists_pg":   round(assists_pg,   1),
+            "steals_pg":    round(steals_pg,    1),
+            "blocks_pg":    round(blocks_pg,    1),
             "win_pct": win_pct,
             "wins":    wins,
             "losses":  losses,

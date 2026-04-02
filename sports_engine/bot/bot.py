@@ -966,8 +966,8 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"_Actualizado: {ts_str}_")
         lines.append("")
         for m in football_matches:
-            league = f" _{m['league']}_" if m.get("league") else ""
-            lines.append(f"  • {m['home']} vs {m['away']}{league}")
+            league = f" _{_md(m['league'])}_" if m.get("league") else ""
+            lines.append(f"  • {_md(m['home'])} vs {_md(m['away'])}{league}")
         # Split into chunks of 50 matches to avoid Telegram limits
         chunk: list[str] = []
         header = lines[:3]  # title + timestamp + blank
@@ -1011,11 +1011,11 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else ""
             )
             status = (
-                f" _{g['status']}_"
+                f" _{_md(g['status'])}_"
                 if g.get("status") and g["status"] not in ("Scheduled", "Pregame", "Pre-Game")
                 else ""
             )
-            lines.append(f"  • {g['home']} vs {g['away']}{score}{status}")
+            lines.append(f"  • {_md(g['home'])} vs {_md(g['away'])}{score}{status}")
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
     # ── Dispatch based on filter ────────────────────────────────────────────
@@ -1892,27 +1892,27 @@ def _format_sport_prediction(pred: dict) -> str:
     home_rec = f" `{pred['home_record']}`" if pred.get("home_record") else ""
     away_rec = f" `{pred['away_record']}`" if pred.get("away_record") else ""
 
-    lines = [f"*{sport}*", f"*{home}{home_rec}* vs *{away}{away_rec}*\n"]
+    lines = [f"*{sport}*", f"*{_md(home)}{home_rec}* vs *{_md(away)}{away_rec}*\n"]
 
     # Win probabilities
     lines.append("🏆 *Probabilidades*")
-    lines.append(f"  {home}: `{pred['home_win']:.1f}%`")
-    lines.append(f"  {away}: `{pred['away_win']:.1f}%`\n")
+    lines.append(f"  {_md(home)}: `{pred['home_win']:.1f}%`")
+    lines.append(f"  {_md(away)}: `{pred['away_win']:.1f}%`\n")
 
     # Sport-specific score/spread block
     if pred.get("expected_home") is not None:
         sport_key = sport.split()[0]
         if sport_key == "NBA":
             lines.append("🎯 *Marcador proyectado*")
-            lines.append(f"  {home}: `{pred['expected_home']:.0f}` pts")
-            lines.append(f"  {away}: `{pred['expected_away']:.0f}` pts")
+            lines.append(f"  {_md(home)}: `{pred['expected_home']:.0f}` pts")
+            lines.append(f"  {_md(away)}: `{pred['expected_away']:.0f}` pts")
             lines.append(f"  Over/Under: `{pred['over_under']}` pts")
             if pred.get("spread_str"):
                 lines.append(f"  Spread: `{pred['spread_str']}`")
             lines.append("")
             lines.append("📊 *Estadísticas de temporada*")
-            lines.append(f"  {home}: `{pred.get('home_ppg', '?')}` PPG / `{pred.get('home_oppg', '?')}` OPPG")
-            lines.append(f"  {away}: `{pred.get('away_ppg', '?')}` PPG / `{pred.get('away_oppg', '?')}` OPPG\n")
+            lines.append(f"  {_md(home)}: `{pred.get('home_ppg', '?')}` PPG / `{pred.get('home_oppg', '?')}` OPPG")
+            lines.append(f"  {_md(away)}: `{pred.get('away_ppg', '?')}` PPG / `{pred.get('away_oppg', '?')}` OPPG\n")
 
             # Quarter projections
             quarters = pred.get("quarter_projections")
@@ -1931,24 +1931,29 @@ def _format_sport_prediction(pred: dict) -> str:
                 home_pp = pp.get("home", {})
                 away_pp = pp.get("away", {})
                 lines.append("🎲 *Props de jugador (líneas estimadas)*")
-                lines.append(f"  📌 Estrella pts: {home} `{home_pp.get('star_points', '?')}` / {away} `{away_pp.get('star_points', '?')}`")
-                lines.append(f"  📌 2° anotador:  {home} `{home_pp.get('2nd_scorer', '?')}` / {away} `{away_pp.get('2nd_scorer', '?')}`")
-                lines.append(f"  🎯 Asistencias PG: {home} `{home_pp.get('assists', '?')}` / {away} `{away_pp.get('assists', '?')}`")
-                lines.append(f"  💪 Rebotes (C):  {home} `{home_pp.get('rebounds_big', '?')}` / {away} `{away_pp.get('rebounds_big', '?')}`")
-                lines.append(f"  🔄 Rebotes (ala): {home} `{home_pp.get('rebounds_wing', '?')}` / {away} `{away_pp.get('rebounds_wing', '?')}`")
+                # Show team-level totals first (from live data when available)
+                if home_pp.get("team_rebounds"):
+                    lines.append(f"  🔢 Rebotes equipo: {_md(home)} `{home_pp['team_rebounds']}` / {_md(away)} `{away_pp.get('team_rebounds', '?')}`")
+                if home_pp.get("team_assists"):
+                    lines.append(f"  🔢 Asist. equipo: {_md(home)} `{home_pp['team_assists']}` / {_md(away)} `{away_pp.get('team_assists', '?')}`")
+                lines.append(f"  📌 Estrella pts: {_md(home)} `{home_pp.get('star_points', '?')}` / {_md(away)} `{away_pp.get('star_points', '?')}`")
+                lines.append(f"  📌 2° anotador:  {_md(home)} `{home_pp.get('2nd_scorer', '?')}` / {_md(away)} `{away_pp.get('2nd_scorer', '?')}`")
+                lines.append(f"  🎯 Asistencias PG: {_md(home)} `{home_pp.get('assists', '?')}` / {_md(away)} `{away_pp.get('assists', '?')}`")
+                lines.append(f"  💪 Rebotes (C):  {_md(home)} `{home_pp.get('rebounds_big', '?')}` / {_md(away)} `{away_pp.get('rebounds_big', '?')}`")
+                lines.append(f"  🔄 Rebotes (ala): {_md(home)} `{home_pp.get('rebounds_wing', '?')}` / {_md(away)} `{away_pp.get('rebounds_wing', '?')}`")
                 lines.append("")
 
         elif sport_key == "NFL":
             lines.append("🎯 *Marcador proyectado*")
-            lines.append(f"  {home}: `{pred['expected_home']:.0f}` pts")
-            lines.append(f"  {away}: `{pred['expected_away']:.0f}` pts")
+            lines.append(f"  {_md(home)}: `{pred['expected_home']:.0f}` pts")
+            lines.append(f"  {_md(away)}: `{pred['expected_away']:.0f}` pts")
             lines.append(f"  Over/Under: `{pred['over_under']}` pts")
             if pred.get("spread_str"):
                 lines.append(f"  Spread: `{pred['spread_str']}`")
             lines.append("")
             lines.append("📊 *Estadísticas de temporada*")
-            lines.append(f"  {home}: `{pred.get('home_ppg', '?')}` PPG / `{pred.get('home_oppg', '?')}` OPPG")
-            lines.append(f"  {away}: `{pred.get('away_ppg', '?')}` PPG / `{pred.get('away_oppg', '?')}` OPPG\n")
+            lines.append(f"  {_md(home)}: `{pred.get('home_ppg', '?')}` PPG / `{pred.get('home_oppg', '?')}` OPPG")
+            lines.append(f"  {_md(away)}: `{pred.get('away_ppg', '?')}` PPG / `{pred.get('away_oppg', '?')}` OPPG\n")
 
             # Quarter projections
             quarters = pred.get("quarter_projections")
@@ -1967,31 +1972,54 @@ def _format_sport_prediction(pred: dict) -> str:
                 home_pp = pp.get("home", {})
                 away_pp = pp.get("away", {})
                 lines.append("🎲 *Props de jugador QB (líneas estimadas)*")
-                lines.append(f"  🏈 Yardas pase:  {home} `{home_pp.get('qb_pass_yards', '?'):.0f}` / {away} `{away_pp.get('qb_pass_yards', '?'):.0f}`")
-                lines.append(f"  🎯 TDs pase:      {home} `{home_pp.get('qb_pass_tds', '?')}` / {away} `{away_pp.get('qb_pass_tds', '?')}`")
-                lines.append(f"  ✅ Compleciones:  {home} `{home_pp.get('qb_completions', '?'):.0f}` / {away} `{away_pp.get('qb_completions', '?'):.0f}`")
-                lines.append(f"  🏃 Yardas tierra: {home} `{home_pp.get('rb_rush_yards', '?'):.0f}` / {away} `{away_pp.get('rb_rush_yards', '?'):.0f}`")
-                lines.append(f"  🏃 TDs tierra:    {home} `{home_pp.get('rb_rush_tds', '?')}` / {away} `{away_pp.get('rb_rush_tds', '?')}`")
-                lines.append(f"  🙌 Recepciones RB:{home} `{home_pp.get('rb_receptions', '?')}` / {away} `{away_pp.get('rb_receptions', '?')}`")
-                lines.append(f"  📡 Yardas WR1:    {home} `{home_pp.get('wr1_recv_yards', '?'):.0f}` / {away} `{away_pp.get('wr1_recv_yards', '?'):.0f}`")
-                lines.append(f"  📡 Recepciones WR:{home} `{home_pp.get('wr1_receptions', '?')}` / {away} `{away_pp.get('wr1_receptions', '?')}`")
-                lines.append(f"  🎯 TDs WR1:       {home} `{home_pp.get('wr1_recv_tds', '?')}` / {away} `{away_pp.get('wr1_recv_tds', '?')}`")
+                lines.append(f"  🏈 Yardas pase:  {_md(home)} `{home_pp.get('qb_pass_yards', '?'):.0f}` / {_md(away)} `{away_pp.get('qb_pass_yards', '?'):.0f}`")
+                lines.append(f"  🎯 TDs pase:      {_md(home)} `{home_pp.get('qb_pass_tds', '?')}` / {_md(away)} `{away_pp.get('qb_pass_tds', '?')}`")
+                lines.append(f"  ✅ Compleciones:  {_md(home)} `{home_pp.get('qb_completions', '?'):.0f}` / {_md(away)} `{away_pp.get('qb_completions', '?'):.0f}`")
+                lines.append(f"  🏃 Yardas tierra: {_md(home)} `{home_pp.get('rb_rush_yards', '?'):.0f}` / {_md(away)} `{away_pp.get('rb_rush_yards', '?'):.0f}`")
+                lines.append(f"  🏃 TDs tierra:    {_md(home)} `{home_pp.get('rb_rush_tds', '?')}` / {_md(away)} `{away_pp.get('rb_rush_tds', '?')}`")
+                lines.append(f"  🙌 Recepciones RB:{_md(home)} `{home_pp.get('rb_receptions', '?')}` / {_md(away)} `{away_pp.get('rb_receptions', '?')}`")
+                lines.append(f"  📡 Yardas WR1:    {_md(home)} `{home_pp.get('wr1_recv_yards', '?'):.0f}` / {_md(away)} `{away_pp.get('wr1_recv_yards', '?'):.0f}`")
+                lines.append(f"  📡 Recepciones WR:{_md(home)} `{home_pp.get('wr1_receptions', '?')}` / {_md(away)} `{away_pp.get('wr1_receptions', '?')}`")
+                lines.append(f"  🎯 TDs WR1:       {_md(home)} `{home_pp.get('wr1_recv_tds', '?')}` / {_md(away)} `{away_pp.get('wr1_recv_tds', '?')}`")
                 lines.append("")
 
         elif sport_key == "MLB":
             lines.append("🎯 *Carreras proyectadas*")
-            lines.append(f"  {home}: `{pred['expected_home']}` runs")
-            lines.append(f"  {away}: `{pred['expected_away']}` runs")
+            lines.append(f"  {_md(home)}: `{pred['expected_home']}` runs")
+            lines.append(f"  {_md(away)}: `{pred['expected_away']}` runs")
             lines.append(f"  Over/Under: `{pred['over_under']}` runs")
-            if pred.get("home_era"):
-                lines.append(f"  ERA pitcheo — {home}: `{pred['home_era']}` / {away}: `{pred.get('away_era', '?')}`")
+            # Pitcher info — show starter name + ERA/WHIP/K9 when available
+            home_p_name = pred.get("home_pitcher")
+            away_p_name = pred.get("away_pitcher")
+            if home_p_name or away_p_name or pred.get("home_era"):
+                lines.append("⚾ *Abridores probables*")
+                if home_p_name:
+                    h_era  = pred.get("home_pitcher_era",  pred.get("home_era",  "?"))
+                    h_whip = pred.get("home_pitcher_whip", "?")
+                    h_k9   = pred.get("home_pitcher_k9",   "?")
+                    era_s  = f"`{h_era:.2f}`"  if isinstance(h_era,  float) else f"`{h_era}`"
+                    whip_s = f"`{h_whip:.2f}`" if isinstance(h_whip, float) else f"`{h_whip}`"
+                    k9_s   = f"`{h_k9:.1f}`"  if isinstance(h_k9,   float) else f"`{h_k9}`"
+                    lines.append(f"  🏠 {_md(home)}: {_md(home_p_name)} — ERA {era_s} WHIP {whip_s} K/9 {k9_s}")
+                elif pred.get("home_era"):
+                    lines.append(f"  ERA pitcheo — {_md(home)}: `{pred['home_era']}`")
+                if away_p_name:
+                    a_era  = pred.get("away_pitcher_era",  pred.get("away_era",  "?"))
+                    a_whip = pred.get("away_pitcher_whip", "?")
+                    a_k9   = pred.get("away_pitcher_k9",   "?")
+                    era_s  = f"`{a_era:.2f}`"  if isinstance(a_era,  float) else f"`{a_era}`"
+                    whip_s = f"`{a_whip:.2f}`" if isinstance(a_whip, float) else f"`{a_whip}`"
+                    k9_s   = f"`{a_k9:.1f}`"  if isinstance(a_k9,   float) else f"`{a_k9}`"
+                    lines.append(f"  ✈️ {_md(away)}: {_md(away_p_name)} — ERA {era_s} WHIP {whip_s} K/9 {k9_s}")
+                elif pred.get("away_era"):
+                    lines.append(f"  ERA pitcheo — {_md(away)}: `{pred['away_era']}`")
 
             # Run line (MLB spread equivalent)
             rl = pred.get("run_line", {})
             if rl:
                 fav_side = rl.get("fav_side", "")
                 fav_name = home if fav_side == "home" else away
-                lines.append(f"  Run line (-1.5): `{fav_name}` cubre `{rl.get('cover_prob', '?')}%`")
+                lines.append(f"  Run line (-1.5): `{_md(fav_name)}` cubre `{rl.get('cover_prob', '?')}%`")
             lines.append("")
 
             # Player props
@@ -2000,10 +2028,10 @@ def _format_sport_prediction(pred: dict) -> str:
                 home_pp = pp.get("home", {})
                 away_pp = pp.get("away", {})
                 lines.append("🎲 *Props de jugador (líneas estimadas)*")
-                lines.append(f"  🎽 Hits equipo:    {home} `{home_pp.get('team_hits', '?')}` / {away} `{away_pp.get('team_hits', '?')}`")
-                lines.append(f"  ⚾ Hits cleanup:   {home} `{home_pp.get('cleanup_hits', '?')}` / {away} `{away_pp.get('cleanup_hits', '?')}`")
-                lines.append(f"  💣 HR cleanup:     {home} `{home_pp.get('cleanup_hr', '?')}` / {away} `{away_pp.get('cleanup_hr', '?')}`")
-                lines.append(f"  🔥 Ks abridor:     {home} `{home_pp.get('ace_strikeouts', '?')}` Ks / {away} `{away_pp.get('ace_strikeouts', '?')}` Ks")
+                lines.append(f"  🎽 Hits equipo:    {_md(home)} `{home_pp.get('team_hits', '?')}` / {_md(away)} `{away_pp.get('team_hits', '?')}`")
+                lines.append(f"  ⚾ Hits cleanup:   {_md(home)} `{home_pp.get('cleanup_hits', '?')}` / {_md(away)} `{away_pp.get('cleanup_hits', '?')}`")
+                lines.append(f"  💣 HR cleanup:     {_md(home)} `{home_pp.get('cleanup_hr', '?')}` / {_md(away)} `{away_pp.get('cleanup_hr', '?')}`")
+                lines.append(f"  🔥 Ks abridor:     {_md(home)} `{home_pp.get('ace_strikeouts', '?')}` Ks / {_md(away)} `{away_pp.get('ace_strikeouts', '?')}` Ks")
                 lines.append("")
 
     # Tennis-specific
@@ -2011,10 +2039,10 @@ def _format_sport_prediction(pred: dict) -> str:
         lines.append(f"🎾 *Superficie:* {pred.get('surface', 'hard').capitalize()}")
         lines.append(f"📏 *Formato:* Mejor de {pred.get('best_of', 3)}")
         lines.append(f"📊 *Elo aproximado*")
-        lines.append(f"  {home}: `{pred.get('elo_p1', '?')}`")
-        lines.append(f"  {away}: `{pred.get('elo_p2', '?')}`\n")
+        lines.append(f"  {_md(home)}: `{pred.get('elo_p1', '?')}`")
+        lines.append(f"  {_md(away)}: `{pred.get('elo_p2', '?')}`\n")
 
-    lines.append(f"💡 *Mejor Pick:* {pred['best_bet']}")
+    lines.append(f"💡 *Mejor Pick:* {_md(pred['best_bet'])}")
     lines.append(f"{conf_emoji} *Confianza:* {conf}")
     lines.append(live_note)
 
@@ -2565,7 +2593,7 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reasons_short = ", ".join(nm.get("reasons", [])[:2])
             near_miss_lines.append(
                 f"  • {_md_escape(nm.get('event_name', 'Partido'))} "
-                f"({nm.get('p_best_raw', 0):.0f}%) — _{reasons_short}_"
+                f"({nm.get('p_best_raw', 0):.0f}%) — _{_md(reasons_short)}_"
             )
         near_miss_text = (
             "\n\n*Picks casi incluidos:*\n" + "\n".join(near_miss_lines)
