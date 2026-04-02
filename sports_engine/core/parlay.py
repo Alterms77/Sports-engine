@@ -39,8 +39,19 @@ from typing import Optional
 
 
 def _md_escape(text: str) -> str:
-    """Escape underscores so Telegram Markdown doesn't treat them as italic markers."""
-    return str(text).replace("_", r"\_")
+    """Escape Telegram Markdown v1 special characters in dynamic content.
+
+    Escapes ``_``, ``*``, backtick, and ``[`` so that user-supplied strings
+    (team names, league names, pick labels, etc.) never break the Markdown
+    entity parser and trigger a "Can't parse entities" error.
+    """
+    return (
+        str(text)
+        .replace("_", r"\_")
+        .replace("*", r"\*")
+        .replace("`", r"\`")
+        .replace("[", r"\[")
+    )
 
 
 def _poisson_over(lam: float, line: float) -> float:

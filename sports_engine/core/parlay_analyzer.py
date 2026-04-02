@@ -452,12 +452,19 @@ def _build_recommendations(legs: list, combined_prob: Optional[float]) -> list:
 
 
 def _esc(text: str) -> str:
-    """Escape Markdown v1 special characters in user-provided strings.
+    """Escape Telegram Markdown v1 special characters in user-provided strings.
 
-    In regular Markdown (v1) only `_` and `*` need escaping inside
-    bold/italic spans to avoid breaking the formatting.
+    Escapes ``_``, ``*``, backtick, and ``[`` so that user-supplied strings
+    never break the Markdown entity parser and trigger a "Can't parse entities"
+    error.
     """
-    return text.replace("_", r"\_").replace("*", r"\*")
+    return (
+        str(text)
+        .replace("_", r"\_")
+        .replace("*", r"\*")
+        .replace("`", r"\`")
+        .replace("[", r"\[")
+    )
 
 
 # ── Telegram formatter ─────────────────────────────────────────────────────────

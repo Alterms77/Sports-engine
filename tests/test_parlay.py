@@ -1052,3 +1052,99 @@ class TestFormatParlayDream:
     def test_responsible_gambling_warning(self):
         text = format_parlay_dream([_build_dream_bundle(_dream_soccer_pred())])
         assert "riesgo" in text.lower()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# _md_escape — special-character escaping (root-cause fix for /parlay entity error)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from core.parlay import _md_escape
+
+
+class TestMdEscape:
+    """Ensure _md_escape sanitises all Telegram Markdown v1 special characters."""
+
+    def test_escapes_underscore(self):
+        assert _md_escape("hello_world") == r"hello\_world"
+
+    def test_escapes_asterisk(self):
+        assert _md_escape("bold*text") == r"bold\*text"
+
+    def test_escapes_backtick(self):
+        assert _md_escape("code`snippet") == "code\\`snippet"
+
+    def test_escapes_open_bracket(self):
+        assert _md_escape("[link]") == r"\[link]"
+
+    def test_escapes_all_special_chars_together(self):
+        raw = "Team_A *vs* `B` [cup]"
+        escaped = _md_escape(raw)
+        assert "\\_" in escaped
+        assert "\\*" in escaped
+        assert "\\`" in escaped
+        assert "\\[" in escaped
+
+    def test_plain_text_unchanged(self):
+        assert _md_escape("Real Madrid vs Barcelona") == "Real Madrid vs Barcelona"
+
+    def test_non_string_coerced(self):
+        assert _md_escape(42) == "42"
+
+
+class TestFormatParlaySpecialChars:
+    """format_parlay must not fail when team/pick names contain Markdown specials."""
+
+    def _leg(self, match, pick, prob=80.0):
+        return {
+            "match": match,
+            "pick": pick,
+            "prob": prob,
+            "league": "Test",
+            "confidence": "ALTA",
+            "market_type": "moneyline",
+            "sport_emoji": "⚽",
+            "risk_reasons": [],
+        }
+
+    def test_asterisk_in_team_name_does_not_break_format(self):
+        legs = [self._leg("FC *Stars* vs Rival", "Victoria FC *Stars*")]
+        parlays = build_parlays(legs + [self._leg("X vs Y", "Victoria X", 78.0)])
+        text = format_parlay(parlays)
+        # Escaped asterisks must appear; raw asterisks that open/close bold must not
+        assert "\\*" in text
+
+    def test_underscore_in_team_name_escaped(self):
+        legs = [
+            self._leg("Team_A vs Team_B", "Victoria Team_A"),
+            self._leg("H vs A", "Victoria H", 78.0),
+        ]
+        parlays = build_parlays(legs)
+        text = format_parlay(parlays)
+        assert "\\_" in text
+
+    def test_backtick_in_pick_escaped(self):
+        legs = [
+            self._leg("Home vs Away", "Over 2.5`s", 82.0),
+            self._leg("X vs Y", "Victoria X", 79.0),
+        ]
+        parlays = build_parlays(legs)
+        text = format_parlay(parlays)
+        assert "\\`" in text
+
+    def test_format_parlay_safe_asterisk_in_pick(self):
+        legs = [self._leg("A vs B", "Victoria A*", 78.0)]
+        report = {"total_candidates": 1, "legs_selected": 1, "exclusions": {}}
+        text = format_parlay_safe(legs, report)
+        assert "\\*" in text
+
+    def test_format_parlay_dream_asterisk_in_match(self):
+        bundle = {
+            "match": "Club *Real* vs Rival",
+            "sport": "⚽ Soccer",
+            "sport_emoji": "⚽",
+            "narrative": "💪 Partido especial",
+            "legs": [{"pick": "Victoria Local", "prob": 72.0, "market_type": "moneyline"}],
+            "bundle_prob": 72.0,
+        }
+        text = format_parlay_dream([bundle])
+        assert "\\*" in text

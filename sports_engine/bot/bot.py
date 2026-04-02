@@ -796,6 +796,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🤖 *ANÁLISIS CON IA (OpenAI GPT)*\n"
+        "🔹 `/analisis LOCAL vs VISITANTE [deporte]`\n"
+        "  Modelo estadístico + narrativa GPT: probabilidades, factores\n"
+        "  clave, riesgo, y recomendación APOSTAR/EVITAR/WATCH.\n"
+        "  _Ej:_ `/analisis Real Madrid vs Barcelona`\n"
+        "  _Ej:_ `/analisis Lakers vs Warriors nba`\n"
+        "  _Ej:_ `/analisis Yankees vs Red Sox mlb`\n\n"
+        "🔹 `/pregunta <tu pregunta>`\n"
+        "  Consulta libre al analista IA sobre apuestas deportivas.\n"
+        "  _Ej:_ `/pregunta ¿Vale el Over 2.5 en el Clásico?`\n"
+        "  _Ej:_ `/pregunta ¿Cómo afecta la baja de Haaland al City?`\n\n"
+        "🔹 `/ai_picks` — Top 3 picks del día con justificación IA\n"
+        "  Analiza todos los partidos del día y detecta valor real.\n\n"
+        "  ⚠️ _Requiere `OPENAI_API_KEY` configurado en variables de entorno._\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
         "📖 *Ayuda — Sports Engine*\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "⚽ *FÚTBOL*\n"
@@ -891,7 +907,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "_Módulos: xThreat · PPDA · FieldTilt · Sharp · CLV · Steam_\n"
         "_Módulos: Liquidity · Consensus · Player · Referee · Weather_\n"
         "_Módulos: Portfolio · Bayes · RL · AH · HT/FT · Parlay_\n"
-        "_Fuentes: SofaScore · TheSportsDB · ESPN_",
+        "_IA: GPT-4o-mini · /analisis · /pregunta · /ai\\_picks_\n"
+        "_Fuentes: SofaScore · TheSportsDB · ESPN · OpenAI_",
         parse_mode="Markdown",
     )
 
@@ -4566,6 +4583,259 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# ── AI-powered commands (OpenAI GPT) ─────────────────────────────────────────
+
+
+async def analisis_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /analisis <equipo1> vs <equipo2> [deporte]
+
+    Runs the statistical model for the match, then asks GPT-4o-mini to produce
+    a narrative analysis: probability evaluation, key factors, risk level, and
+    a clear betting recommendation.
+
+    Examples
+    --------
+    /analisis Real Madrid vs Barcelona
+    /analisis Lakers vs Warriors nba
+    /analisis Yankees vs Red Sox mlb
+    /analisis Sinner vs Alcaraz clay
+    """
+    from core.ai_analysis import analyze_prediction, is_available, _NO_KEY_MSG
+
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso: `/analisis EQUIPO1 vs EQUIPO2 [deporte]`\n\n"
+            "_Ej:_ `/analisis Real Madrid vs Barcelona`\n"
+            "_Ej:_ `/analisis Lakers vs Warriors nba`\n"
+            "_Ej:_ `/analisis Yankees vs Red Sox mlb`",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+
+    # Detect sport hint at the end of the string
+    sport = "soccer"
+    sport_map = {
+        "nba": "nba", "basketball": "nba",
+        "mlb": "mlb", "beisbol": "mlb", "béisbol": "mlb", "baseball": "mlb",
+        "nfl": "nfl", "americano": "nfl",
+        "tenis": "tennis", "tennis": "tennis",
+        "soccer": "soccer", "futbol": "soccer", "fútbol": "soccer",
+    }
+    tokens = raw.lower().split()
+    if tokens and tokens[-1] in sport_map:
+        sport = sport_map[tokens[-1]]
+        raw = " ".join(context.args[:-1])
+
+    # Split on "vs" / "VS" / "v/"
+    parts = re.split(r"\s+vs\.?\s+|\s+v\s+", raw, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) != 2:
+        await update.message.reply_text(
+            "❌ No pude encontrar el separador `vs` entre los equipos/jugadores.\n"
+            "_Ej:_ `/analisis Real Madrid vs Barcelona`",
+            parse_mode="Markdown",
+        )
+        return
+
+    home_name = parts[0].strip()
+    away_name = parts[1].strip()
+
+    await update.message.reply_text(
+        f"🤖 _Generando análisis IA para_ *{_md(home_name)} vs {_md(away_name)}*…",
+        parse_mode="Markdown",
+    )
+
+    # ── Run statistical model ─────────────────────────────────────────────────
+    pred: dict = {}
+    try:
+        if sport == "nba":
+            home_c = _bball.resolve_team(home_name) or home_name
+            away_c = _bball.resolve_team(away_name) or away_name
+            pred = _bball.predict_game(home_c, away_c)
+        elif sport == "mlb":
+            home_c = _baseball.resolve_team(home_name) or home_name
+            away_c = _baseball.resolve_team(away_name) or away_name
+            pred = _baseball.predict_game(home_c, away_c)
+        elif sport == "nfl":
+            home_c = _nfl.resolve_team(home_name) or home_name
+            away_c = _nfl.resolve_team(away_name) or away_name
+            pred = _nfl.predict_game(home_c, away_c)
+        elif sport == "tennis":
+            p1 = _tennis.resolve_player(home_name) or home_name
+            p2 = _tennis.resolve_player(away_name) or away_name
+            # Surface may be in the original args
+            surface = "hard"
+            for surf in ("clay", "grass", "hard"):
+                if surf in raw.lower():
+                    surface = surf
+                    break
+            pred = _tennis.predict_match(p1, p2, surface=surface)
+        else:
+            # Soccer (default)
+            pred = get_full_prediction(home_name, away_name)
+            sport = "soccer"
+    except Exception as exc:
+        logger.warning("analisis_command: model error: %s", exc)
+        pred = {"home": home_name, "away": away_name, "error": str(exc)}
+
+    # ── Ask GPT ──────────────────────────────────────────────────────────────
+    ai_text = await _asyncio.get_event_loop().run_in_executor(
+        None, lambda: analyze_prediction(pred, sport)
+    )
+
+    # ── Format response ───────────────────────────────────────────────────────
+    header = (
+        "╔══════════════════════════════════╗\n"
+        f"  🤖 ANÁLISIS IA — {_md(home_name)} vs {_md(away_name)}\n"
+        "╚══════════════════════════════════╝\n"
+    )
+
+    # Stats thumbnail for context
+    stat_lines = []
+    if sport == "soccer" and pred.get("home_win"):
+        stat_lines.append(
+            f"📊 Modelo: Local {pred.get('home_win')}% / "
+            f"X {pred.get('draw', '?')}% / "
+            f"Visitante {pred.get('away_win', '?')}%"
+        )
+        if pred.get("over_2_5"):
+            stat_lines.append(f"⚽ O2.5 {pred['over_2_5']}% | BTTS {pred.get('btts', '?')}%")
+    elif pred.get("home_win"):
+        stat_lines.append(
+            f"📊 Modelo: {_md(home_name)} {pred.get('home_win')}% / "
+            f"{_md(away_name)} {pred.get('away_win', '?')}%"
+        )
+    if stat_lines:
+        header += "\n".join(stat_lines) + "\n\n"
+
+    header += "━━━━━━━━━━━━━━━━━━━━\n🧠 *Análisis GPT:*\n"
+
+    full_text = header + ai_text
+    try:
+        await update.message.reply_text(full_text, parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text(full_text)
+
+
+async def pregunta_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /pregunta <tu pregunta sobre apuestas deportivas>
+
+    Free-form sports betting Q&A powered by GPT-4o-mini.
+    GPT answers as an expert sports analyst using statistical reasoning.
+
+    Examples
+    --------
+    /pregunta ¿Tiene valor el Over 2.5 en el Clásico hoy?
+    /pregunta ¿Cómo afecta la baja de Haaland a las apuestas del City?
+    /pregunta ¿Qué es el Kelly Criterion y cómo usarlo?
+    /pregunta ¿Cuál es el mejor mercado para parlays de MLB?
+    """
+    from core.ai_analysis import answer_betting_question
+
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Uso: `/pregunta <tu pregunta>`\n\n"
+            "_Ej:_ `/pregunta ¿Vale la pena apostar al Over 2.5 en el Clásico?`\n"
+            "_Ej:_ `/pregunta ¿Qué mercado tiene más valor en NBA?`",
+            parse_mode="Markdown",
+        )
+        return
+
+    question = " ".join(context.args).strip()
+
+    await update.message.reply_text(
+        "🤖 _Consultando al analista IA…_",
+        parse_mode="Markdown",
+    )
+
+    ai_text = await _asyncio.get_event_loop().run_in_executor(
+        None, lambda: answer_betting_question(question)
+    )
+
+    header = (
+        "╔══════════════════════════════════╗\n"
+        "  🤖 ANÁLISIS IA — Pregunta\n"
+        "╚══════════════════════════════════╝\n\n"
+        f"❓ *{_md(question)}*\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+    )
+    full_text = header + ai_text
+    try:
+        await update.message.reply_text(full_text, parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text(full_text)
+
+
+async def ai_picks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /ai_picks — AI picks summary for today's matches.
+
+    Fetches today's schedule, runs statistical predictions, then asks GPT to
+    identify the top 3 value picks with statistical justification.
+    Requires OPENAI_API_KEY; gracefully shows a fallback if not configured.
+    """
+    from core.ai_analysis import ai_picks_summary
+
+    await update.message.reply_text(
+        "🤖 _Analizando los partidos del día con IA…_",
+        parse_mode="Markdown",
+    )
+
+    # Gather today's predictions (reuse existing _predict_one logic via parlay)
+    try:
+        from api.live_aggregator import get_today_schedule as _get_schedule
+        raw_matches = _get_schedule()
+        matches = [
+            m for m in raw_matches
+            if m.get("sport") in ("soccer", "nba", "nfl", "mlb", "tennis")
+        ][:15]
+    except Exception as exc:
+        logger.warning("ai_picks_command: schedule error: %s", exc)
+        matches = []
+
+    if not matches:
+        await update.message.reply_text(
+            "⚠️ _No se encontraron partidos para hoy._\n"
+            "Usa `/today` para verificar el calendario.",
+            parse_mode="Markdown",
+        )
+        return
+
+    # Run predictions
+    semaphore = _asyncio.Semaphore(4)
+    preds = await _asyncio.gather(
+        *[_predict_one(m, semaphore) for m in matches],
+        return_exceptions=False,
+    )
+    predictions = [p for p in preds if p is not None]
+
+    if not predictions:
+        await update.message.reply_text(
+            "⚠️ _No se pudieron generar predicciones para los partidos de hoy._"
+        )
+        return
+
+    ai_text = await _asyncio.get_event_loop().run_in_executor(
+        None, lambda: ai_picks_summary(predictions)
+    )
+
+    header = (
+        "╔══════════════════════════════════╗\n"
+        "  🤖 TOP PICKS IA — Sports Engine\n"
+        "╚══════════════════════════════════╝\n\n"
+        f"📅 _{len(predictions)} partidos analizados_\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+    )
+    full_text = header + ai_text
+    try:
+        await update.message.reply_text(full_text, parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text(full_text)
+
+
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle all inline-keyboard button presses.
@@ -4752,6 +5022,11 @@ def main():
     app.add_handler(CommandHandler("mlb", mlb))
     app.add_handler(CommandHandler("nfl", nfl))
     app.add_handler(CommandHandler("tennis", tennis))
+
+    # ── AI-powered commands (OpenAI GPT) ──
+    app.add_handler(CommandHandler("analisis",  analisis_command))
+    app.add_handler(CommandHandler("pregunta",  pregunta_command))
+    app.add_handler(CommandHandler("ai_picks",  ai_picks_command))
 
     # ── Live data commands (SofaScore / TheSportsDB / ESPN) ──
     app.add_handler(CommandHandler("live", live))
