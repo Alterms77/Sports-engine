@@ -4554,82 +4554,86 @@ async def send_daily_alerts(context: ContextTypes.DEFAULT_TYPE):
 
 # Each entry: (button_label, callback_data)
 # callback_data must be unique and ≤ 64 bytes (Telegram limit).
-_MENU_SECTIONS = [
-    # Section header (displayed as a disabled text row, full width)
-    ("── 🎯 PREDICCIONES ──", None),
-    ("⚽ Predict",   "cmd_predict"),
-    ("🏀 NBA",       "cmd_nba"),
-    ("⚾ MLB",       "cmd_mlb"),
-    ("🏈 NFL",       "cmd_nfl"),
-    ("🎾 Tennis",    "cmd_tennis"),
-    ("🔄 H2H",       "cmd_h2h"),
-    ("🔥 Top Picks", "cmd_top"),
-    ("📈 Tendencia", "cmd_tendencia"),
-
-    ("── 🎰 PARLAYS ──", None),
-    ("🎰 Parlay",        "cmd_parlay"),
-    ("🛡 Parlay Safe",   "cmd_parlay_safe"),
-    ("🌙 Parlay Soñador", "cmd_parlay_dream"),
-    ("📸 Check Parlay",  "cmd_checkparlay"),
-
-    ("── 📅 TODAY ──", None),
-    ("⚽ Fútbol Hoy",  "cmd_today_futbol"),
-    ("🏀 NBA Hoy",     "cmd_today_nba"),
-    ("🏈 NFL Hoy",     "cmd_today_nfl"),
-    ("⚾ MLB Hoy",     "cmd_today_mlb"),
-    ("🎾 Tenis Hoy",   "cmd_today_tenis"),
-    ("📅 Todo Hoy",    "cmd_today"),
-    ("📅 Mañana",      "cmd_manana"),
-    ("🤖 Pronósticos", "cmd_pronosticos"),
-
-    ("── 📊 ESTADÍSTICAS ──", None),
-    ("📊 Stats Bot",     "cmd_stats"),
-    ("📋 Stats Equipo",  "cmd_stats_team"),
-    ("📈 Forma Equipo",  "cmd_form"),
-    ("📊 Historial",     "cmd_historial"),
-    ("🏆 Record Result", "cmd_resultado"),
-    ("🔢 Estadísticas",  "cmd_estadisticas"),
-
-    ("── 💡 ANÁLISIS AVANZADO ──", None),
-    ("💰 Value Bet",   "cmd_value"),
-    ("🗺 Mercados",    "cmd_markets"),
-    ("🧠 Intel",       "cmd_intel"),
-    ("👤 Props Player","cmd_player"),
-    ("🌦 Clima",       "cmd_weather"),
-    ("⚖️ Árbitro",     "cmd_referee"),
-
-    ("── 🤖 ANÁLISIS IA ──", None),
-    ("🤖 Análisis IA",  "cmd_analisis"),
-    ("❓ Pregunta IA",  "cmd_pregunta"),
-    ("🏅 AI Picks",     "cmd_ai_picks"),
-    ("🎾 Elo Update",   "cmd_elo_update"),
-
-    ("── 💰 APUESTAS AVANZADAS ──", None),
-    ("📊 CLV",         "cmd_clv"),
-    ("⚠️ Riesgo",      "cmd_risk"),
-    ("💼 Portfolio",   "cmd_portfolio"),
-    ("🧮 Bayes",       "cmd_bayes"),
-    ("💧 Liquidez",    "cmd_liquidity"),
-    ("🔥 Steam",       "cmd_steam"),
-    ("🤝 Consenso",    "cmd_consensus"),
-
-    ("── 🛰 SCANNER ──", None),
-    ("🛰 Autoscan",    "cmd_autoscan"),
-    ("🔍 Scanner",     "cmd_scanner"),
-    ("🔎 Scan Odds",   "cmd_scanodds"),
-    ("➕ Add Market",  "cmd_addmarket"),
-    ("🗑 Clear Markets","cmd_clearmarkets"),
-
-    ("── 📡 DATOS EN VIVO ──", None),
-    ("📡 Live",       "cmd_live"),
-    ("📺 Scores",     "cmd_scores"),
-    ("🏆 Tabla",      "cmd_tabla"),
-    ("📡 LiveTeam",   "cmd_liveteam"),
-
-    ("── 🔔 ALERTAS ──", None),
-    ("🔔 Activar alertas",    "cmd_alertas_on"),
-    ("🔕 Desactivar alertas", "cmd_alertas_off"),
-]
+# Two-level menu: /menu shows category buttons; tapping one shows its commands.
+#
+# Structure: section_key → (display_label, [(btn_label, callback_data), ...])
+# The display_label is shown both on the main-menu button and as the sub-menu header.
+_MENU_GROUPS: dict[str, tuple[str, list[tuple[str, str]]]] = {
+    "sec_predicciones": ("🎯 Predicciones", [
+        ("⚽ Predict",   "cmd_predict"),
+        ("🏀 NBA",       "cmd_nba"),
+        ("⚾ MLB",       "cmd_mlb"),
+        ("🏈 NFL",       "cmd_nfl"),
+        ("🎾 Tennis",    "cmd_tennis"),
+        ("🔄 H2H",       "cmd_h2h"),
+        ("🔥 Top Picks", "cmd_top"),
+        ("📈 Tendencia", "cmd_tendencia"),
+    ]),
+    "sec_parlays": ("🎰 Parlays", [
+        ("🎰 Parlay",         "cmd_parlay"),
+        ("🛡 Parlay Safe",    "cmd_parlay_safe"),
+        ("🌙 Parlay Soñador", "cmd_parlay_dream"),
+        ("📸 Check Parlay",   "cmd_checkparlay"),
+    ]),
+    "sec_today": ("📅 Partidos", [
+        ("⚽ Fútbol Hoy",  "cmd_today_futbol"),
+        ("🏀 NBA Hoy",     "cmd_today_nba"),
+        ("🏈 NFL Hoy",     "cmd_today_nfl"),
+        ("⚾ MLB Hoy",     "cmd_today_mlb"),
+        ("🎾 Tenis Hoy",   "cmd_today_tenis"),
+        ("📅 Todo Hoy",    "cmd_today"),
+        ("📅 Mañana",      "cmd_manana"),
+        ("🤖 Pronósticos", "cmd_pronosticos"),
+    ]),
+    "sec_estadisticas": ("📊 Estadísticas", [
+        ("📊 Stats Bot",     "cmd_stats"),
+        ("📋 Stats Equipo",  "cmd_stats_team"),
+        ("📈 Forma Equipo",  "cmd_form"),
+        ("📈 Historial",     "cmd_historial"),
+        ("🏆 Record Result", "cmd_resultado"),
+        ("🔢 Estadísticas",  "cmd_estadisticas"),
+    ]),
+    "sec_analisis": ("💡 Análisis Avanzado", [
+        ("💰 Value Bet",    "cmd_value"),
+        ("🗺 Mercados",     "cmd_markets"),
+        ("🧠 Intel",        "cmd_intel"),
+        ("👤 Props Player", "cmd_player"),
+        ("🌦 Clima",        "cmd_weather"),
+        ("⚖️ Árbitro",      "cmd_referee"),
+    ]),
+    "sec_ia": ("🤖 Análisis IA", [
+        ("🤖 Análisis IA", "cmd_analisis"),
+        ("❓ Pregunta IA", "cmd_pregunta"),
+        ("🏅 AI Picks",    "cmd_ai_picks"),
+        ("🎾 Elo Update",  "cmd_elo_update"),
+    ]),
+    "sec_apuestas": ("💰 Apuestas Avanzadas", [
+        ("📊 CLV",       "cmd_clv"),
+        ("⚠️ Riesgo",    "cmd_risk"),
+        ("💼 Portfolio", "cmd_portfolio"),
+        ("🧮 Bayes",     "cmd_bayes"),
+        ("💧 Liquidez",  "cmd_liquidity"),
+        ("🔥 Steam",     "cmd_steam"),
+        ("🤝 Consenso",  "cmd_consensus"),
+    ]),
+    "sec_scanner": ("🛰 Scanner", [
+        ("🛰 Autoscan",      "cmd_autoscan"),
+        ("🔍 Scanner",       "cmd_scanner"),
+        ("🔎 Scan Odds",     "cmd_scanodds"),
+        ("➕ Add Market",    "cmd_addmarket"),
+        ("🗑 Clear Markets", "cmd_clearmarkets"),
+    ]),
+    "sec_live": ("📡 Datos en Vivo", [
+        ("📡 Live",     "cmd_live"),
+        ("📺 Scores",   "cmd_scores"),
+        ("🏆 Tabla",    "cmd_tabla"),
+        ("📡 LiveTeam", "cmd_liveteam"),
+    ]),
+    "sec_alertas": ("🔔 Alertas", [
+        ("🔔 Activar alertas",    "cmd_alertas_on"),
+        ("🔕 Desactivar alertas", "cmd_alertas_off"),
+    ]),
+}
 
 # Map callback_data → the async handler function name
 _MENU_DISPATCH: dict[str, str] = {
@@ -4698,51 +4702,58 @@ _MENU_DISPATCH: dict[str, str] = {
 }
 
 
-def _build_inline_keyboard() -> InlineKeyboardMarkup:
+def _build_main_keyboard() -> InlineKeyboardMarkup:
     """
-    Build the full inline keyboard.
-
-    Section headers (entries with ``callback_data=None``) appear as a single
-    full-width disabled-looking button labelled with the section title.
-    All other entries are laid out two per row.
+    Build the top-level keyboard: one button per category, two per row.
+    Tapping a category button triggers ``sec_<key>`` in menu_callback,
+    which edits this message to show only that section's commands.
     """
     rows: list[list[InlineKeyboardButton]] = []
     pair: list[InlineKeyboardButton] = []
-
-    for label, cb in _MENU_SECTIONS:
-        if cb is None:
-            # Flush any pending pair first
-            if pair:
-                rows.append(pair)
-                pair = []
-            # Section header — full-width, uses a no-op callback so Telegram
-            # doesn't complain about a button with no action.
-            rows.append([InlineKeyboardButton(label, callback_data="noop")])
-        else:
-            pair.append(InlineKeyboardButton(label, callback_data=cb))
-            if len(pair) == 2:
-                rows.append(pair)
-                pair = []
-
-    if pair:          # flush last odd button
+    for key, (label, _) in _MENU_GROUPS.items():
+        pair.append(InlineKeyboardButton(label, callback_data=key))
+        if len(pair) == 2:
+            rows.append(pair)
+            pair = []
+    if pair:
         rows.append(pair)
+    return InlineKeyboardMarkup(rows)
 
+
+def _build_section_keyboard(section_key: str) -> InlineKeyboardMarkup:
+    """
+    Build the sub-menu keyboard for *section_key*.
+    Command buttons are laid out two per row, followed by a full-width
+    '◀️ Volver' button that navigates back to the main category menu.
+    """
+    _, buttons = _MENU_GROUPS[section_key]
+    rows: list[list[InlineKeyboardButton]] = []
+    pair: list[InlineKeyboardButton] = []
+    for label, cb in buttons:
+        pair.append(InlineKeyboardButton(label, callback_data=cb))
+        if len(pair) == 2:
+            rows.append(pair)
+            pair = []
+    if pair:
+        rows.append(pair)
+    rows.append([InlineKeyboardButton("◀️ Volver al Menú", callback_data="menu_back")])
     return InlineKeyboardMarkup(rows)
 
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /menu — Show the interactive inline keyboard.
+    /menu — Show the interactive two-level inline keyboard.
 
-    Pressing any button triggers the corresponding bot command in-chat so
-    the user never has to type a slash command manually.
+    The main menu lists category buttons.  Tapping a category replaces the
+    message with the commands in that category.  A '◀️ Volver' button returns
+    to the category view.
     """
     await update.message.reply_text(
         "🤖 *Sports Engine — Menú Principal*\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "Elige una opción:",
+        "Elige una categoría:",
         parse_mode="Markdown",
-        reply_markup=_build_inline_keyboard(),
+        reply_markup=_build_main_keyboard(),
     )
 
 
@@ -5003,16 +5014,42 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle all inline-keyboard button presses.
 
-    Each button's ``callback_data`` is looked up in ``_MENU_DISPATCH`` to
-    find the handler function, which is then called directly — exactly as if
-    the user had sent the corresponding slash command.
+    Two-level navigation:
+    • ``sec_<key>``  — edit the message to show that section's sub-menu.
+    • ``menu_back``  — edit the message back to the main category menu.
+    • ``noop``       — section-header label, do nothing.
+    • ``cmd_*``      — looked up in ``_MENU_DISPATCH`` and executed directly.
     """
     query = update.callback_query
     await query.answer()   # dismiss the Telegram "loading" spinner
 
     cb = query.data
+
+    # ── Navigation: back to main menu ────────────────────────────────────────
+    if cb == "menu_back":
+        await query.edit_message_text(
+            "🤖 *Sports Engine — Menú Principal*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Elige una categoría:",
+            parse_mode="Markdown",
+            reply_markup=_build_main_keyboard(),
+        )
+        return
+
+    # ── Navigation: open a category sub-menu ─────────────────────────────────
+    if cb in _MENU_GROUPS:
+        label, _ = _MENU_GROUPS[cb]
+        await query.edit_message_text(
+            f"🤖 *Sports Engine — {label}*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Elige un comando:",
+            parse_mode="Markdown",
+            reply_markup=_build_section_keyboard(cb),
+        )
+        return
+
+    # ── Legacy no-op (section headers in old flat menus) ─────────────────────
     if cb == "noop":
-        # Section-header button — nothing to do
         return
 
     # Commands that need arguments show a usage hint instead of running blind
