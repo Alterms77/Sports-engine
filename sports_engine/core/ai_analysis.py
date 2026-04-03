@@ -82,6 +82,14 @@ _SYSTEM_PROMPT = (
 
 _RATE_LIMIT_DELAY = 1.0  # seconds between calls to avoid hitting rate limits
 
+# Retry settings for 429 / 5xx transient errors
+_MAX_RETRIES  = 3
+_RETRY_BASE   = 2.0   # exponential-backoff base (seconds): 2, 4, 8 …
+
+# Simple in-process response cache: (messages_hash, max_tokens) → (text, ts)
+_RESPONSE_CACHE: dict = {}
+_CACHE_TTL = 300  # 5 minutes — avoids duplicate API calls for identical prompts
+
 
 def _call_openai(
     messages: list[dict],
@@ -89,7 +97,16 @@ def _call_openai(
     temperature: float = 0.4,
 ) -> str:
     """
-    Call the OpenAI Chat Completions endpoint.
+    Call the OpenAI Chat Completions endpoint with retry on 429/5xx.
+
+    Retry strategy
+    --------------
+    * Up to ``_MAX_RETRIES`` attempts.
+    * On HTTP 429 (rate-limit) or 5xx (server error) waits
+      ``_RETRY_BASE ** attempt`` seconds before retrying.
+    * Other HTTP errors are re-raised immediately (no retry).
+    * Identical prompt+token combos are served from an in-process cache
+      for up to 5 minutes to reduce unnecessary API calls.
 
     Returns the model's text response, or raises RuntimeError on failure.
     """
@@ -97,25 +114,65 @@ def _call_openai(
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY no configurado")
 
+    # ── In-process cache lookup ───────────────────────────────────────────
+    cache_key = (str(messages), max_tokens)
+    now = time.time()
+    if cache_key in _RESPONSE_CACHE:
+        cached_text, cached_ts = _RESPONSE_CACHE[cache_key]
+        if now - cached_ts < _CACHE_TTL:
+            logger.debug("_call_openai: serving from cache")
+            return cached_text
+
     payload = {
         "model": _model(),
         "max_tokens": max_tokens,
         "temperature": temperature,
         "messages": messages,
     }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
 
-    resp = requests.post(
-        _OPENAI_CHAT_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return data["choices"][0]["message"]["content"].strip()
+    last_exc: Exception = RuntimeError("No se pudo contactar la IA")
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = requests.post(
+                _OPENAI_CHAT_URL,
+                headers=headers,
+                json=payload,
+                timeout=30,
+            )
+            if resp.status_code == 429 or resp.status_code >= 500:
+                # Transient error — back off and retry
+                wait = _RETRY_BASE ** attempt
+                logger.warning(
+                    "_call_openai: HTTP %s on attempt %d/%d, retrying in %.1fs",
+                    resp.status_code, attempt + 1, _MAX_RETRIES, wait,
+                )
+                time.sleep(wait)
+                last_exc = requests.exceptions.HTTPError(
+                    f"HTTP {resp.status_code}", response=resp
+                )
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            text = data["choices"][0]["message"]["content"].strip()
+            _RESPONSE_CACHE[cache_key] = (text, time.time())
+            return text
+        except requests.exceptions.Timeout as exc:
+            wait = _RETRY_BASE ** attempt
+            logger.warning("_call_openai: timeout attempt %d, retrying in %.1fs", attempt + 1, wait)
+            time.sleep(wait)
+            last_exc = exc
+        except requests.exceptions.HTTPError as exc:
+            # Non-retryable HTTP error — raise immediately
+            raise
+        except Exception as exc:
+            last_exc = exc
+            break
+
+    raise last_exc
 
 
 # ── Internal prompt builders ──────────────────────────────────────────────────
@@ -260,6 +317,31 @@ _NO_KEY_MSG = (
     "en las variables de entorno para activar el análisis GPT."
 )
 
+# Human-friendly messages for common API error scenarios.
+# These replace the raw exception string (which can contain underscores, URLs,
+# and other characters that break Telegram MarkdownV1 inside _…_ italic blocks).
+def _friendly_ai_error(exc: Exception) -> str:
+    """Return a short, Markdown-safe description of an OpenAI API failure.
+
+    Never exposes raw HTTP error details (URLs, status lines) that could
+    contain underscores or other Telegram MarkdownV1 special characters.
+    """
+    msg = str(exc)
+    if "429" in msg or "rate" in msg.lower() or "Too Many" in msg:
+        return "límite de solicitudes alcanzado — intenta en unos segundos"
+    if "401" in msg or "Unauthorized" in msg or "authentication" in msg.lower():
+        return "API key inválida o expirada"
+    if "403" in msg or "Forbidden" in msg:
+        return "acceso denegado por OpenAI"
+    if "500" in msg or "502" in msg or "503" in msg or "server" in msg.lower():
+        return "error temporal del servidor de IA"
+    if "timeout" in msg.lower() or "Timeout" in msg:
+        return "tiempo de espera agotado — intenta de nuevo"
+    if "OPENAI_API_KEY" in msg:
+        return "API key de OpenAI no configurada"
+    # Generic fallback — still Markdown-safe (no underscores / asterisks)
+    return "no se pudo contactar el servicio de IA"
+
 
 def analyze_prediction(pred: dict, sport: str = "soccer") -> str:
     """
@@ -305,7 +387,7 @@ def analyze_prediction(pred: dict, sport: str = "soccer") -> str:
         )
     except Exception as exc:
         logger.warning("AI analyze_prediction failed: %s", exc)
-        return f"⚠️ _Error al consultar IA: {exc}_"
+        return f"⚠️ _Error al consultar IA: {_friendly_ai_error(exc)}_"
 
 
 def generate_parlay_narrative(
@@ -361,7 +443,7 @@ def generate_parlay_narrative(
         )
     except Exception as exc:
         logger.warning("AI generate_parlay_narrative failed: %s", exc)
-        return f"⚠️ _Error al generar narrativa IA: {exc}_"
+        return f"⚠️ _Error al generar narrativa IA: {_friendly_ai_error(exc)}_"
 
 
 def answer_betting_question(question: str, context_text: str = "") -> str:
@@ -403,7 +485,7 @@ def answer_betting_question(question: str, context_text: str = "") -> str:
         )
     except Exception as exc:
         logger.warning("AI answer_betting_question failed: %s", exc)
-        return f"⚠️ _Error al consultar IA: {exc}_"
+        return f"⚠️ _Error al consultar IA: {_friendly_ai_error(exc)}_"
 
 
 def ai_picks_summary(predictions: list[dict]) -> str:
@@ -459,4 +541,4 @@ def ai_picks_summary(predictions: list[dict]) -> str:
         )
     except Exception as exc:
         logger.warning("AI ai_picks_summary failed: %s", exc)
-        return f"⚠️ _Error al generar resumen IA: {exc}_"
+        return f"⚠️ _Error al generar resumen IA: {_friendly_ai_error(exc)}_"

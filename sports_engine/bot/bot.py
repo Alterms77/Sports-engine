@@ -1960,6 +1960,31 @@ def _format_sport_prediction(pred: dict) -> str:
                 lines.append(f"  🔄 Rebotes (ala): {_md(home)} `{home_pp.get('rebounds_wing', '?')}` / {_md(away)} `{away_pp.get('rebounds_wing', '?')}`")
                 lines.append("")
 
+            # ── Team statistical leaders from ESPN (real player names + stats) ─
+            home_ldrs = pred.get("home_leaders", {})
+            away_ldrs = pred.get("away_leaders", {})
+            if home_ldrs or away_ldrs:
+                lines.append("⭐ *Líderes de temporada (ESPN)*")
+                scorer_h = home_ldrs.get("top_scorer")
+                scorer_a = away_ldrs.get("top_scorer")
+                if scorer_h or scorer_a:
+                    h_str = f"{_md(scorer_h['name'])} `{scorer_h['value']} PPG`" if scorer_h else "—"
+                    a_str = f"{_md(scorer_a['name'])} `{scorer_a['value']} PPG`" if scorer_a else "—"
+                    lines.append(f"  🏆 Top anotador: {h_str} / {a_str}")
+                reb_h = home_ldrs.get("top_rebounder")
+                reb_a = away_ldrs.get("top_rebounder")
+                if reb_h or reb_a:
+                    h_str = f"{_md(reb_h['name'])} `{reb_h['value']} RPG`" if reb_h else "—"
+                    a_str = f"{_md(reb_a['name'])} `{reb_a['value']} RPG`" if reb_a else "—"
+                    lines.append(f"  💪 Top reboteador: {h_str} / {a_str}")
+                ast_h = home_ldrs.get("top_assists")
+                ast_a = away_ldrs.get("top_assists")
+                if ast_h or ast_a:
+                    h_str = f"{_md(ast_h['name'])} `{ast_h['value']} APG`" if ast_h else "—"
+                    a_str = f"{_md(ast_a['name'])} `{ast_a['value']} APG`" if ast_a else "—"
+                    lines.append(f"  🎯 Top asistidor: {h_str} / {a_str}")
+                lines.append("")
+
         elif sport_key == "NFL":
             lines.append("🎯 *Marcador proyectado*")
             lines.append(f"  {_md(home)}: `{pred['expected_home']:.0f}` pts")
@@ -2131,7 +2156,7 @@ async def sports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def nba(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/nba HOME vs AWAY — NBA game prediction."""
+    """/nba HOME vs AWAY — NBA game prediction with live leaders and optional AI analysis."""
     if not context.args or " vs " not in " ".join(context.args).lower():
         await update.message.reply_text(
             "❌ Formato:\n`/nba LOCAL vs VISITANTE`\n\n_Ej:_ `/nba Lakers vs Celtics`",
@@ -2153,6 +2178,19 @@ async def nba(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             _format_sport_prediction(pred), parse_mode="Markdown"
         )
+        # ── Optional inline AI analysis ────────────────────────────────────
+        try:
+            from core.ai_analysis import analyze_prediction, is_available
+            if is_available():
+                ai_text = await _asyncio.get_event_loop().run_in_executor(
+                    None, lambda: analyze_prediction(pred, "nba")
+                )
+                await update.message.reply_text(
+                    "🤖 *Análisis IA:*\n" + ai_text,
+                    parse_mode="Markdown",
+                )
+        except Exception as ai_exc:
+            logger.debug("NBA inline AI analysis skipped: %s", ai_exc)
     except Exception as exc:
         logger.exception("Error en /nba %s vs %s", home, away)
         # Try suggestions
@@ -2167,7 +2205,7 @@ async def nba(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def mlb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/mlb HOME vs AWAY — MLB game prediction."""
+    """/mlb HOME vs AWAY — MLB game prediction with live starters and optional AI analysis."""
     if not context.args or " vs " not in " ".join(context.args).lower():
         await update.message.reply_text(
             "❌ Formato:\n`/mlb LOCAL vs VISITANTE`\n\n_Ej:_ `/mlb Yankees vs Red Sox`",
@@ -2186,6 +2224,19 @@ async def mlb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             _format_sport_prediction(pred), parse_mode="Markdown"
         )
+        # ── Optional inline AI analysis ────────────────────────────────────
+        try:
+            from core.ai_analysis import analyze_prediction, is_available
+            if is_available():
+                ai_text = await _asyncio.get_event_loop().run_in_executor(
+                    None, lambda: analyze_prediction(pred, "mlb")
+                )
+                await update.message.reply_text(
+                    "🤖 *Análisis IA:*\n" + ai_text,
+                    parse_mode="Markdown",
+                )
+        except Exception as ai_exc:
+            logger.debug("MLB inline AI analysis skipped: %s", ai_exc)
     except Exception as exc:
         logger.exception("Error en /mlb %s vs %s", home, away)
         sugg_h = _baseball.suggest_teams(home_raw.strip())
@@ -2671,7 +2722,7 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Build parlays: only ALTA confidence, ≥ 68 % probability ──────────
     from core.parlay import (
         generate_parlay_legs, build_parlays, format_parlay,
-        MIN_CONF_DEFAULT, MIN_PROB_DEFAULT, _md_escape,
+        MIN_CONF_DEFAULT, MIN_PROB_DEFAULT, _md_escape, _fmt_excl_key,
     )
     from core.parlay_history import save_parlay as _save_parlay, get_calibration_stats
 
@@ -2691,8 +2742,12 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(legs) < 2:
         total = report.get("total_candidates", len(predictions))
         excl  = report.get("exclusions", {})
+        # Root-cause fix: use _fmt_excl_key (underscore→hyphen) instead of
+        # _md() so that reason codes never contain a bare "_" that Telegram
+        # MarkdownV1 misreads as an italic marker inside the _()_ block below,
+        # which caused the recurring "can't find end of entity" error.
         excl_str = ", ".join(
-            f"{_md(k)}={v}" for k, v in sorted(excl.items(), key=lambda x: -x[1])
+            f"{_fmt_excl_key(k)}={v}" for k, v in sorted(excl.items(), key=lambda x: -x[1])
         ) if excl else "ninguno"
 
         # Show top near-miss picks so the user understands the quality bar
@@ -2703,10 +2758,13 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )[:3]
         near_miss_lines = []
         for nm in near_misses:
-            reasons_short = ", ".join(nm.get("reasons", [])[:2])
+            # _fmt_excl_key avoids bare "_" inside the italic _…_ wrapper
+            reasons_short = ", ".join(
+                _fmt_excl_key(r) for r in nm.get("reasons", [])[:2]
+            )
             near_miss_lines.append(
                 f"  • {_md_escape(nm.get('event_name', 'Partido'))} "
-                f"({nm.get('p_best_raw', 0):.0f}%) — _{_md(reasons_short)}_"
+                f"({nm.get('p_best_raw', 0):.0f}%) — _{reasons_short}_"
             )
         near_miss_text = (
             "\n\n*Picks casi incluidos:*\n" + "\n".join(near_miss_lines)

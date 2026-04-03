@@ -44,6 +44,14 @@ def _md_escape(text: str) -> str:
     Escapes ``_``, ``*``, backtick, and ``[`` so that user-supplied strings
     (team names, league names, pick labels, etc.) never break the Markdown
     entity parser and trigger a "Can't parse entities" error.
+
+    .. warning::
+        Do **not** embed the output of this function inside ``_…_`` or
+        ``*…*`` formatting markers.  Telegram MarkdownV1 re-parses the
+        backslash-escaped ``\\_`` as an italic-end marker, producing an
+        unclosed entity that raises "can't find end of the entity" errors.
+        Use :func:`_fmt_excl_key` for internal code strings (e.g. exclusion
+        reason keys) that will be placed inside or near italic/bold blocks.
     """
     return (
         str(text)
@@ -52,6 +60,25 @@ def _md_escape(text: str) -> str:
         .replace("`", r"\`")
         .replace("[", r"\[")
     )
+
+
+def _fmt_excl_key(key: str) -> str:
+    """Format an internal exclusion-reason key for safe Telegram display.
+
+    Root-cause fix for the recurring "can't find end of entity" error:
+    exclusion reason codes like ``LOW_CONF`` or ``HIGH_RISK`` contain
+    underscores.  When ``_md_escape`` is applied to them the underscore
+    becomes ``\\_``.  Telegram MarkdownV1 then re-interprets that ``_``
+    as an italic-end marker — especially when the string appears inside
+    an outer ``_…_`` block — creating an unclosed italic entity.
+
+    The safest fix is to **never escape** these internal codes but instead
+    replace the underscore with a hyphen so there is no formatting character
+    at all.  ``LOW_CONF`` → ``LOW-CONF``, ``HIGH_RISK`` → ``HIGH-RISK``.
+    This is purely cosmetic for human-readable output and is 100% safe
+    with all Telegram parse modes.
+    """
+    return str(key).replace("_", "-")
 
 
 def _poisson_over(lam: float, line: float) -> float:
@@ -1206,10 +1233,13 @@ def format_parlay(
         lines.append("")
 
     # Exclusion summary
+    # NOTE: use _fmt_excl_key (hyphen, not escaped underscore) so that
+    # internal codes like LOW-CONF never contain a bare "_" that Telegram
+    # MarkdownV1 would treat as an italic start/end marker.
     if report and report.get("exclusions"):
         excl = report["exclusions"]
         total_excl = sum(excl.values())
-        parts = ", ".join(f"{_md_escape(k)}={v}" for k, v in sorted(excl.items()))
+        parts = ", ".join(f"{_fmt_excl_key(k)}={v}" for k, v in sorted(excl.items()))
         lines.append(
             f"🔍 _{total_excl} partido(s) excluido(s): {parts}_"
         )
@@ -1731,7 +1761,10 @@ def format_parlay_safe(
     lines.append(f"  Legs elegidas: `{sel}`")
     if excl:
         for reason, cnt in sorted(excl.items(), key=lambda x: -x[1]):
-            lines.append(f"  {_md_escape(reason)}: `{cnt}`")
+            # Use _fmt_excl_key (underscore → hyphen) so LOW-CONF never
+            # contains a bare "_" that Telegram MarkdownV1 would parse as
+            # an italic marker, causing "can't find end of entity" errors.
+            lines.append(f"  {_fmt_excl_key(reason)}: `{cnt}`")
     lines.append("")
 
     if parlay_id:

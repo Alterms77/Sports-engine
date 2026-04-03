@@ -263,9 +263,15 @@ class TestFormatters:
 class TestWithMockedOpenAI:
     """Verify the call path when the API key is set and OpenAI responds."""
 
+    def setup_method(self):
+        """Clear the in-process response cache before each test."""
+        import core.ai_analysis
+        core.ai_analysis._RESPONSE_CACHE.clear()
+
     def _mock_response(self, text: str):
         """Build a mock requests.Response that looks like an OpenAI response."""
         mock_resp = MagicMock()
+        mock_resp.status_code = 200  # needed by the retry logic in _call_openai
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json.return_value = {
             "choices": [{"message": {"content": text}}]
@@ -339,3 +345,77 @@ class TestWithMockedOpenAI:
         # Count how many "Real Madrid vs Barcelona" lines appear
         line_count = user_msg.count("Real Madrid")
         assert line_count <= 12
+
+    # ── New tests for 429 retry and friendly error messages ────────────────
+
+    def test_429_triggers_retry_and_returns_friendly_error(self):
+        """HTTP 429 must trigger retry logic and eventually return a friendly error."""
+        rate_limit_resp = MagicMock()
+        rate_limit_resp.status_code = 429
+        rate_limit_resp.raise_for_status = MagicMock()
+
+        with patch("core.ai_analysis._api_key", return_value="sk-fake"):
+            with patch("time.sleep"):  # skip actual sleep in tests
+                with patch("requests.post", return_value=rate_limit_resp):
+                    result = analyze_prediction(_soccer_pred(), "soccer")
+
+        # Must not expose raw HTTP error details — must use friendly message
+        assert "Error" in result or "error" in result
+        assert "429" not in result
+        assert "https://" not in result
+        assert "límite" in result
+
+    def test_friendly_ai_error_429(self):
+        """_friendly_ai_error returns human-readable text for 429."""
+        from core.ai_analysis import _friendly_ai_error
+        exc = Exception("429 Client Error: Too Many Requests for url: https://api.openai.com/v1/chat/completions")
+        msg = _friendly_ai_error(exc)
+        assert "429" not in msg
+        assert "https://" not in msg
+        assert "_" not in msg  # must be Markdown-safe (no underscores)
+
+    def test_friendly_ai_error_timeout(self):
+        """_friendly_ai_error returns human-readable text for timeouts."""
+        from core.ai_analysis import _friendly_ai_error
+        import requests as req_mod
+        exc = req_mod.exceptions.Timeout("Read timed out")
+        msg = _friendly_ai_error(exc)
+        assert "_" not in msg
+
+    def test_friendly_ai_error_no_key(self):
+        """_friendly_ai_error returns human-readable text for missing API key."""
+        from core.ai_analysis import _friendly_ai_error
+        exc = RuntimeError("OPENAI_API_KEY no configurado")
+        msg = _friendly_ai_error(exc)
+        assert "_" not in msg
+
+    def test_error_string_is_markdown_safe(self):
+        """Error messages returned from analyze_prediction must be Markdown-safe.
+
+        The error string is embedded inside ``_…_`` italic in the bot output,
+        so it must NOT contain bare underscores or other MarkdownV1 specials.
+        """
+        rate_limit_resp = MagicMock()
+        rate_limit_resp.status_code = 429
+        rate_limit_resp.raise_for_status = MagicMock()
+
+        with patch("core.ai_analysis._api_key", return_value="sk-fake"):
+            with patch("time.sleep"):
+                with patch("requests.post", return_value=rate_limit_resp):
+                    result = analyze_prediction(_soccer_pred(), "soccer")
+
+        # The friendly-error portion inside _…_ must not contain bare underscores
+        # (the outer `⚠️ _Error..._` wrapper is fine — we check the inner text)
+        # Strip the known wrapper to get the inner content
+        inner = result.replace("⚠️ _Error al consultar IA: ", "").rstrip("_")
+        assert "_" not in inner, f"Underscore in error text: {inner!r}"
+
+    def test_response_cache_serves_repeat_calls(self):
+        """Identical prompts must be served from cache on second call."""
+        with patch("core.ai_analysis._api_key", return_value="sk-fake"):
+            with patch("requests.post", return_value=self._mock_response("cached")) as mock_post:
+                first  = analyze_prediction(_soccer_pred(), "soccer")
+                second = analyze_prediction(_soccer_pred(), "soccer")
+        # API should only be called once
+        assert mock_post.call_count == 1
+        assert first == second == "cached"

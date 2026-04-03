@@ -794,8 +794,10 @@ class TestFormatParlayReport:
         parlays = build_parlays(_make_legs([85.0, 82.0, 80.0]))
         text = format_parlay(parlays, report=report)
         assert "excluido" in text.lower()
-        # Keys are escaped for Markdown v1 — underscores become \_
-        assert "LOW\\_CONF" in text
+        # Root-cause fix: keys now use hyphens (LOW-CONF) not escaped underscores
+        # (LOW\_CONF) because the latter caused Telegram MarkdownV1 entity errors.
+        assert "LOW-CONF" in text
+        assert "LOW_CONF" not in text  # no raw underscore
 
     def test_report_none_falls_back_to_filtered_count(self):
         parlays = build_parlays(_make_legs([85.0, 82.0]))
@@ -1155,10 +1157,41 @@ class TestFormatParlaySpecialChars:
 # Markdown escaping of exclusion keys/reasons
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class TestExclusionKeyEscaping:
-    """Verify that exclusion keys with underscores are escaped in output."""
+from core.parlay import _fmt_excl_key
 
-    def test_format_parlay_exclusion_keys_with_underscores_escaped(self):
+
+class TestFmtExclKey:
+    """_fmt_excl_key must turn underscores into hyphens for safe Telegram display.
+
+    Root-cause fix: exclusion codes like LOW_CONF contain underscores.
+    Previously _md_escape turned them into LOW\\_CONF but Telegram MarkdownV1
+    re-parses the backslash-escaped underscore as an italic marker inside
+    _..._  blocks, producing an unclosed entity error.  _fmt_excl_key replaces
+    underscore with hyphen so no Markdown special character remains.
+    """
+
+    def test_single_underscore_replaced(self):
+        assert _fmt_excl_key("LOW_CONF") == "LOW-CONF"
+
+    def test_multiple_underscores_replaced(self):
+        assert _fmt_excl_key("MARKET_NOT_WHITELISTED") == "MARKET-NOT-WHITELISTED"
+
+    def test_no_underscore_unchanged(self):
+        assert _fmt_excl_key("HIGHSCORE") == "HIGHSCORE"
+
+    def test_non_string_coerced(self):
+        assert _fmt_excl_key(42) == "42"
+
+
+class TestExclusionKeyEscaping:
+    """Verify that exclusion keys with underscores are safe in format_parlay output.
+
+    After the root-cause fix the output uses hyphens (LOW-CONF) instead of
+    Markdown-escaped underscores (LOW\\_CONF) so Telegram never sees a bare
+    underscore inside an italic block that could trigger entity-parse errors.
+    """
+
+    def test_format_parlay_exclusion_keys_no_raw_underscore(self):
         import re
         report = {
             "total_candidates": 10,
@@ -1167,14 +1200,17 @@ class TestExclusionKeyEscaping:
         }
         parlays = build_parlays(_make_legs([85.0, 82.0]))
         text = format_parlay(parlays, report=report)
-        # Keys must appear (escaped) in the output
-        assert "COIN\\_FLIP" in text
-        assert "LOW\\_PROB" in text
-        # Raw unescaped underscores must not appear (only escaped ones should)
-        assert not re.search(r"(?<!\\)COIN_FLIP", text)
-        assert not re.search(r"(?<!\\)LOW_PROB", text)
+        # Hyphen-form must appear
+        assert "COIN-FLIP" in text
+        assert "LOW-PROB" in text
+        # No raw underscores from these internal keys — that is the root-cause fix
+        assert "COIN_FLIP" not in text
+        assert "LOW_PROB" not in text
+        # No Markdown-escaped underscore form either (that was the broken approach)
+        assert "COIN\\_FLIP" not in text
+        assert "LOW\\_PROB" not in text
 
-    def test_format_parlay_safe_exclusion_reasons_with_underscores_escaped(self):
+    def test_format_parlay_safe_exclusion_reasons_no_raw_underscore(self):
         import re
         legs = [
             {
@@ -1194,8 +1230,9 @@ class TestExclusionKeyEscaping:
             "exclusions": {"LOW_CONF": 2, "HIGH_RISK": 1},
         }
         text = format_parlay_safe(legs, report)
-        # Keys must appear (escaped) in the output
-        assert "LOW\\_CONF" in text
-        assert "HIGH\\_RISK" in text
-        assert not re.search(r"(?<!\\)LOW_CONF", text)
-        assert not re.search(r"(?<!\\)HIGH_RISK", text)
+        # Hyphen-form must appear
+        assert "LOW-CONF" in text
+        assert "HIGH-RISK" in text
+        # No raw underscores from these keys
+        assert "LOW_CONF" not in text
+        assert "HIGH_RISK" not in text

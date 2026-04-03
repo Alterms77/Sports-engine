@@ -140,7 +140,195 @@ def get_all_scoreboards() -> list:
     return all_games
 
 
-# ── Team lookups ───────────────────────────────────────────────────────────────
+# ── MLB probable starters ──────────────────────────────────────────────────────
+
+def get_mlb_probable_starters(home_name: str, away_name: str) -> dict:
+    """
+    Return the probable starting pitchers for an MLB game from ESPN's scoreboard.
+
+    Looks through today's MLB scoreboard for a game matching ``home_name``
+    and ``away_name`` (fuzzy) and extracts each team's ``probables`` entry.
+
+    Returned dict (keys may be absent if ESPN has no data):
+    ::
+
+        {
+          "home_pitcher": {"name": str, "era": float, "hand": str},
+          "away_pitcher": {"name": str, "era": float, "hand": str},
+        }
+
+    Returns {} when ESPN is unreachable or no matching game is found.
+    """
+    path = SPORT_PATHS.get("mlb")
+    data = _fetch(f"{_BASE}/{path}/scoreboard")
+    if not data:
+        return {}
+
+    home_q = _normalize(home_name)
+    away_q = _normalize(away_name)
+    result: dict = {}
+
+    for event in data.get("events", []):
+        comps = event.get("competitions", [{}])
+        comp = comps[0] if comps else {}
+        competitors = comp.get("competitors", [])
+        if len(competitors) < 2:
+            continue
+
+        home_c = next((c for c in competitors if c.get("homeAway") == "home"), competitors[0])
+        away_c = next((c for c in competitors if c.get("homeAway") == "away"), competitors[1])
+
+        home_team = _normalize(home_c.get("team", {}).get("displayName", ""))
+        away_team = _normalize(away_c.get("team", {}).get("displayName", ""))
+        home_abbr = _normalize(home_c.get("team", {}).get("abbreviation", ""))
+        away_abbr = _normalize(away_c.get("team", {}).get("abbreviation", ""))
+
+        # Fuzzy match: input query must overlap with at least one name variant
+        home_match = any(
+            home_q in s or s in home_q
+            for s in (home_team, home_abbr)
+            if s
+        )
+        away_match = any(
+            away_q in s or s in away_q
+            for s in (away_team, away_abbr)
+            if s
+        )
+        if not (home_match and away_match):
+            continue
+
+        # Extract probable pitcher info for each side
+        def _parse_probable(competitor: dict) -> Optional[dict]:
+            probables = competitor.get("probables", [])
+            if not probables:
+                return None
+            p = probables[0]
+            athlete = p.get("athlete", {})
+            name = athlete.get("fullName") or athlete.get("displayName") or ""
+            if not name:
+                return None
+            pitcher: dict = {"name": name}
+            # Hand (throwing arm) from position or athlete info
+            hand = athlete.get("throwHand", {}).get("abbreviation", "")
+            if not hand:
+                hand = p.get("throwHand", {}).get("abbreviation", "")
+            if hand:
+                pitcher["hand"] = hand
+            # Season ERA from the stats array shipped with the probable
+            for stat in p.get("statistics", []):
+                abbr = stat.get("abbreviation", "").upper()
+                if abbr == "ERA":
+                    try:
+                        pitcher["era"] = float(stat["displayValue"])
+                    except (KeyError, ValueError, TypeError):
+                        pass
+                elif abbr == "WHIP":
+                    try:
+                        pitcher["whip"] = float(stat["displayValue"])
+                    except (KeyError, ValueError, TypeError):
+                        pass
+                elif abbr in ("K/9", "SO9", "K9"):
+                    try:
+                        pitcher["k_per_9"] = float(stat["displayValue"])
+                    except (KeyError, ValueError, TypeError):
+                        pass
+            return pitcher
+
+        home_p = _parse_probable(home_c)
+        away_p = _parse_probable(away_c)
+        if home_p:
+            result["home_pitcher"] = home_p
+        if away_p:
+            result["away_pitcher"] = away_p
+        logger.debug(
+            "ESPN MLB starters for %s vs %s: home=%s away=%s",
+            home_name, away_name,
+            result.get("home_pitcher", {}).get("name"),
+            result.get("away_pitcher", {}).get("name"),
+        )
+        return result
+
+    logger.debug("ESPN: no MLB game found for %s vs %s", home_name, away_name)
+    return {}
+
+
+# ── NBA team leaders (top scorer / rebounder / assists) ────────────────────────
+
+def get_nba_team_leaders(team_name: str) -> dict:
+    """
+    Return the season statistical leaders for an NBA team.
+
+    Uses ESPN's team endpoint (``/teams/{id}``) which includes a ``leaders``
+    array with category leaders per stat group.
+
+    Returned dict:
+    ::
+
+        {
+          "top_scorer":    {"name": str, "value": str},   # pts per game
+          "top_rebounder": {"name": str, "value": str},   # reb per game
+          "top_assists":   {"name": str, "value": str},   # ast per game
+        }
+
+    Missing categories are omitted.  Returns {} on any failure.
+    """
+    team_id = find_team_id("nba", team_name)
+    if not team_id:
+        logger.debug("ESPN NBA: team '%s' not found", team_name)
+        return {}
+
+    data = _fetch(f"{_BASE}/{SPORT_PATHS['nba']}/teams/{team_id}")
+    if not data:
+        return {}
+
+    leaders_raw = data.get("team", {}).get("leaders", [])
+    result: dict = {}
+
+    # ESPN leader categories vary by season; map common names
+    _cat_map = {
+        "pointsPerGame":   "top_scorer",
+        "avgPoints":       "top_scorer",
+        "reboundsPerGame": "top_rebounder",
+        "avgRebounds":     "top_rebounder",
+        "assistsPerGame":  "top_assists",
+        "avgAssists":      "top_assists",
+    }
+
+    for cat in leaders_raw:
+        cat_name = cat.get("name", "") or cat.get("displayName", "")
+        key = _cat_map.get(cat_name)
+        if not key:
+            # Try a case-insensitive fragment match
+            cat_l = cat_name.lower()
+            if "point" in cat_l:
+                key = "top_scorer"
+            elif "rebound" in cat_l:
+                key = "top_rebounder"
+            elif "assist" in cat_l:
+                key = "top_assists"
+        if not key or key in result:
+            continue
+        leaders_list = cat.get("leaders", [])
+        if not leaders_list:
+            continue
+        leader = leaders_list[0]
+        athlete = leader.get("athlete", {})
+        name = (
+            athlete.get("displayName")
+            or athlete.get("fullName")
+            or athlete.get("shortName")
+            or ""
+        )
+        value = (
+            leader.get("displayValue")
+            or str(leader.get("value", ""))
+        )
+        if name:
+            result[key] = {"name": name, "value": value}
+
+    logger.debug("ESPN NBA leaders for %s: %s", team_name, result)
+    return result
+
 
 def _iter_teams(data: dict):
     """Yield (id, displayName, abbreviation, location) tuples from ESPN JSON."""
