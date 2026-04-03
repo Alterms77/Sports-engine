@@ -456,11 +456,32 @@ def get_mlb_today_starters(home_team: str, away_team: str) -> dict:
                     or pit.get("so9")
                     or 0.0
                 )
+
+                # Pitcher handedness (throws R/L).  Present in some schedule
+                # responses; also tried from a dedicated profile call.
+                hand = (
+                    raw.get("preferred_hand")
+                    or raw.get("throws")
+                    or raw.get("throw_hand")
+                    or ""
+                ).upper()
+                if hand not in ("R", "L"):
+                    # Try a separate player-profile call for handedness
+                    player_id = raw.get("id") or raw.get("player_id")
+                    if player_id:
+                        hand = _mlb_pitcher_hand(player_id)
+
+                # Recent starts (last 5) — fetched from the game-log endpoint
+                player_id = raw.get("id") or raw.get("player_id")
+                recent_starts = _mlb_pitcher_recent_starts(player_id) if player_id else []
+
                 return {
-                    "name":    name,
-                    "era":     round(era,  2) if era  else None,
-                    "whip":    round(whip, 2) if whip else None,
-                    "k_per_9": round(k9,   1) if k9   else None,
+                    "name":          name,
+                    "era":           round(era,  2) if era  else None,
+                    "whip":          round(whip, 2) if whip else None,
+                    "k_per_9":       round(k9,   1) if k9   else None,
+                    "hand":          hand or None,
+                    "recent_starts": recent_starts,
                 }
 
             return {
@@ -479,6 +500,90 @@ def get_mlb_today_starters(home_team: str, away_team: str) -> dict:
     except Exception as exc:
         logger.debug("Sportradar MLB starters: %s", exc)
         return _EMPTY
+
+
+def _mlb_pitcher_hand(player_id: str) -> str:
+    """
+    Return "R" or "L" for a pitcher's throwing hand via their Sportradar
+    player profile.  Returns "" on failure.
+    """
+    try:
+        url  = _mlb_url(f"players/{player_id}/profile")
+        data = _fetch(url, ttl=_TTL_SEASON)
+        if not data:
+            return ""
+        player = data.get("player", data)
+        hand = (
+            player.get("preferred_hand")
+            or player.get("throws")
+            or player.get("throw_hand")
+            or ""
+        ).upper()
+        return hand if hand in ("R", "L") else ""
+    except Exception as exc:
+        logger.debug("Sportradar pitcher hand for %s: %s", player_id, exc)
+        return ""
+
+
+def _mlb_pitcher_recent_starts(player_id: str, n: int = 5) -> list:
+    """
+    Return the last *n* starts for a pitcher as a list of dicts::
+
+        [{"date": "MM/DD", "ip": "6.0", "er": 2, "k": 7, "result": "W"}, ...]
+
+    Returns [] on failure or missing data.
+    """
+    from datetime import datetime as _dt
+    try:
+        url  = _mlb_url(f"players/{player_id}/game_log")
+        data = _fetch(url, ttl=_TTL_SCHEDULE)
+        if not data:
+            return []
+
+        games = data.get("games", []) or data.get("game_log", [])
+        starts = []
+        for g in games:
+            pit = (
+                g.get("statistics", {}).get("pitching", {})
+                or g.get("stats", {}).get("pitching", {})
+                or g.get("pitching", {})
+            )
+            ip_raw = pit.get("ip_pitched") or pit.get("innings_pitched") or pit.get("ip")
+            if ip_raw is None:
+                continue  # skip position-player appearances
+
+            date_raw = (
+                g.get("game", {}).get("scheduled")
+                or g.get("scheduled")
+                or g.get("date", "")
+            )
+            try:
+                dt = _dt.fromisoformat(str(date_raw)[:10]) if date_raw else None
+                date_str = dt.strftime("%m/%d") if dt else "?"
+            except Exception:
+                date_str = str(date_raw)[:5] if date_raw else "?"
+
+            win  = pit.get("win",  False)
+            loss = pit.get("loss", False)
+            result = "W" if win else ("L" if loss else "-")
+
+            er_raw = pit.get("earned_runs") or pit.get("er") or 0
+            k_raw  = pit.get("strikeouts")  or pit.get("so") or pit.get("k") or 0
+
+            starts.append({
+                "date":   date_str,
+                "ip":     str(ip_raw),
+                "er":     int(er_raw),
+                "k":      int(k_raw),
+                "result": result,
+            })
+
+        # Most-recent first; return last n
+        return starts[-n:][::-1]
+
+    except Exception as exc:
+        logger.debug("Sportradar pitcher game log for %s: %s", player_id, exc)
+        return []
 
 
 # ════════════════════════════════════════════════════════════════════════════════

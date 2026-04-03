@@ -2014,20 +2014,34 @@ def _format_sport_prediction(pred: dict) -> str:
                     h_era  = pred.get("home_pitcher_era",  pred.get("home_era",  "?"))
                     h_whip = pred.get("home_pitcher_whip", "?")
                     h_k9   = pred.get("home_pitcher_k9",   "?")
+                    h_hand = pred.get("home_pitcher_hand") or ""
                     era_s  = f"`{h_era:.2f}`"  if isinstance(h_era,  float) else f"`{h_era}`"
                     whip_s = f"`{h_whip:.2f}`" if isinstance(h_whip, float) else f"`{h_whip}`"
                     k9_s   = f"`{h_k9:.1f}`"  if isinstance(h_k9,   float) else f"`{h_k9}`"
-                    lines.append(f"  🏠 {_md(home)}: {_md(home_p_name)} — ERA {era_s} WHIP {whip_s} K/9 {k9_s}")
+                    hand_s = f" `{h_hand}`" if h_hand else ""
+                    lines.append(f"  🏠 {_md(home)}: {_md(home_p_name)}{hand_s} — ERA {era_s} WHIP {whip_s} K/9 {k9_s}")
+                    h_starts = pred.get("home_pitcher_recent_starts") or []
+                    if h_starts:
+                        lines.append("    📋 Últimas salidas: `Fecha  IP  CE   K  Res`")
+                        for s in h_starts:
+                            lines.append(f"    `{s.get('date','?'):>5}  {s.get('ip','?'):>4}  {s.get('er','?'):>2}  {s.get('k','?'):>3}  {s.get('result','?')}`")
                 elif pred.get("home_era"):
                     lines.append(f"  ERA pitcheo — {_md(home)}: `{pred['home_era']}`")
                 if away_p_name:
                     a_era  = pred.get("away_pitcher_era",  pred.get("away_era",  "?"))
                     a_whip = pred.get("away_pitcher_whip", "?")
                     a_k9   = pred.get("away_pitcher_k9",   "?")
+                    a_hand = pred.get("away_pitcher_hand") or ""
                     era_s  = f"`{a_era:.2f}`"  if isinstance(a_era,  float) else f"`{a_era}`"
                     whip_s = f"`{a_whip:.2f}`" if isinstance(a_whip, float) else f"`{a_whip}`"
                     k9_s   = f"`{a_k9:.1f}`"  if isinstance(a_k9,   float) else f"`{a_k9}`"
-                    lines.append(f"  ✈️ {_md(away)}: {_md(away_p_name)} — ERA {era_s} WHIP {whip_s} K/9 {k9_s}")
+                    hand_s = f" `{a_hand}`" if a_hand else ""
+                    lines.append(f"  ✈️ {_md(away)}: {_md(away_p_name)}{hand_s} — ERA {era_s} WHIP {whip_s} K/9 {k9_s}")
+                    a_starts = pred.get("away_pitcher_recent_starts") or []
+                    if a_starts:
+                        lines.append("    📋 Últimas salidas: `Fecha  IP  CE   K  Res`")
+                        for s in a_starts:
+                            lines.append(f"    `{s.get('date','?'):>5}  {s.get('ip','?'):>4}  {s.get('er','?'):>2}  {s.get('k','?'):>3}  {s.get('result','?')}`")
                 elif pred.get("away_era"):
                     lines.append(f"  ERA pitcheo — {_md(away)}: `{pred['away_era']}`")
 
@@ -2055,9 +2069,22 @@ def _format_sport_prediction(pred: dict) -> str:
     if "Tenis" in sport:
         lines.append(f"🎾 *Superficie:* {pred.get('surface', 'hard').capitalize()}")
         lines.append(f"📏 *Formato:* Mejor de {pred.get('best_of', 3)}")
-        lines.append(f"📊 *Elo aproximado*")
-        lines.append(f"  {_md(home)}: `{pred.get('elo_p1', '?')}`")
-        lines.append(f"  {_md(away)}: `{pred.get('elo_p2', '?')}`\n")
+        dyn1 = pred.get("elo_dynamic_p1", False)
+        dyn2 = pred.get("elo_dynamic_p2", False)
+        dyn_note1 = " 🔄" if dyn1 else " 📌"
+        dyn_note2 = " 🔄" if dyn2 else " 📌"
+        n1 = pred.get("matches_recorded_p1", 0)
+        n2 = pred.get("matches_recorded_p2", 0)
+        n1_s = f" ({n1} partidos)" if n1 else ""
+        n2_s = f" ({n2} partidos)" if n2 else ""
+        lines.append(f"📊 *Elo {'dinámico' if (dyn1 or dyn2) else 'estimado'}*")
+        lines.append(f"  {_md(home)}:{dyn_note1} `{pred.get('elo_p1', '?')}`{n1_s}")
+        lines.append(f"  {_md(away)}:{dyn_note2} `{pred.get('elo_p2', '?')}`{n2_s}")
+        if dyn1 or dyn2:
+            lines.append("  _🔄 = Elo actualizado con resultados reales_")
+        else:
+            lines.append("  _📌 = Elo estimado — usa `/elo_update` para mejorar la precisión_")
+        lines.append("")
 
     lines.append(f"💡 *Mejor Pick:* {_md(pred['best_bet'])}")
     lines.append(f"{conf_emoji} *Confianza:* {conf}")
@@ -2080,7 +2107,9 @@ async def sports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  `/mlb LOCAL vs VISITANTE`\n\n"
         "🏈 *NFL* — spread, O/U, cuartos, props QB/RB/WR\n"
         "  `/nfl LOCAL vs VISITANTE`\n\n"
-        "🎾 *Tenis* — `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
+        "🎾 *Tenis* — Elo dinámico por jugador y superficie\n"
+        "  `/tennis J1 vs J2 [clay/grass/hard]`\n"
+        "  `/elo_update GANADOR vs PERDEDOR [surface] [slam]`\n\n"
         "📡 *Datos en vivo*\n"
         "  `/live [deporte]` — marcadores en vivo ahora\n"
         "  `/scores [deporte]` — partidos de hoy\n"
@@ -2247,6 +2276,73 @@ async def tennis(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if sugg_p2:
             tip += "\n¿Jugador 2? " + ", ".join(sugg_p2)
         await update.message.reply_text(f"❌ Error: {exc}{tip}")
+
+
+async def elo_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /elo_update GANADOR vs PERDEDOR [clay/grass/hard] [slam]
+
+    Record a real ATP/WTA match result to update the dynamic Elo ratings.
+    This improves future prediction accuracy for both players.
+
+    Examples:
+      /elo_update Djokovic vs Medvedev hard
+      /elo_update Alcaraz vs Sinner clay slam
+    """
+    if not context.args or " vs " not in " ".join(context.args).lower():
+        await update.message.reply_text(
+            "❌ Formato:\n`/elo_update GANADOR vs PERDEDOR [clay/grass/hard] [slam]`\n\n"
+            "_Ej:_ `/elo_update Djokovic vs Medvedev hard`\n"
+            "_Ej:_ `/elo_update Alcaraz vs Sinner clay slam`\n\n"
+            "Registra el resultado real para actualizar el Elo dinámico.",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+
+    # Extract optional "slam" flag
+    is_slam = False
+    if raw.lower().endswith(" slam"):
+        is_slam = True
+        raw = raw[:-5].strip()
+
+    # Extract optional surface
+    surface = "hard"
+    for surf in ("clay", "grass", "hard"):
+        if raw.lower().endswith(f" {surf}"):
+            surface = surf
+            raw = raw[: -(len(surf) + 1)].strip()
+            break
+
+    if " vs " not in raw.lower():
+        await update.message.reply_text("❌ Usa el formato: `GANADOR vs PERDEDOR [surface]`", parse_mode="Markdown")
+        return
+
+    winner_raw, loser_raw = raw.split(" vs ", 1)
+    winner = _tennis.resolve_player(winner_raw.strip()) or winner_raw.strip()
+    loser  = _tennis.resolve_player(loser_raw.strip())  or loser_raw.strip()
+
+    try:
+        result = _tennis.record_tennis_result(winner, loser, surface=surface, is_slam=is_slam)
+        slam_tag = " 🏆 Grand Slam" if is_slam else ""
+        surf_emoji = {"clay": "🏟️", "grass": "🌱", "hard": "🏢"}.get(surface, "🎾")
+        await update.message.reply_text(
+            f"✅ *Resultado registrado*{slam_tag}\n\n"
+            f"🏆 Ganador: {_md(winner)}\n"
+            f"❌ Perdedor: {_md(loser)}\n"
+            f"Superficie: {surf_emoji} {surface.capitalize()}\n\n"
+            f"📊 *Elo actualizado*\n"
+            f"  {_md(winner)}: `{result['winner_elo']}` _(+{result['delta']:.1f})_\n"
+            f"  {_md(loser)}: `{result['loser_elo']}` _(-{result['delta']:.1f})_\n\n"
+            f"  Elo superficie — {_md(winner)}: `{result['winner_surface_elo']}`\n"
+            f"  Elo superficie — {_md(loser)}: `{result['loser_surface_elo']}`\n\n"
+            f"_Usa `/tennis {_md(winner)} vs {_md(loser)} {surface}` para ver la nueva predicción._",
+            parse_mode="Markdown",
+        )
+    except Exception as exc:
+        logger.exception("Error en /elo_update")
+        await update.message.reply_text(f"❌ Error actualizando Elo: {exc}")
 
 
 # ===============================
@@ -5025,6 +5121,7 @@ def main():
     app.add_handler(CommandHandler("mlb", mlb))
     app.add_handler(CommandHandler("nfl", nfl))
     app.add_handler(CommandHandler("tennis", tennis))
+    app.add_handler(CommandHandler("elo_update",  elo_update))
 
     # ── AI-powered commands (OpenAI GPT) ──
     app.add_handler(CommandHandler("analisis",  analisis_command))
