@@ -1149,3 +1149,51 @@ class TestFormatParlaySpecialChars:
         }
         text = format_parlay_dream([bundle])
         assert "\\*" in text
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Markdown escaping of exclusion keys/reasons
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestExclusionKeyEscaping:
+    """Verify that exclusion keys with underscores are escaped in output."""
+
+    def test_format_parlay_exclusion_keys_with_underscores_escaped(self):
+        import re
+        report = {
+            "total_candidates": 10,
+            "legs_selected": 2,
+            "exclusions": {"COIN_FLIP": 3, "LOW_PROB": 2},
+        }
+        parlays = build_parlays(_make_legs([85.0, 82.0]))
+        text = format_parlay(parlays, report=report)
+        assert "COIN\\_FLIP" in text
+        assert "LOW\\_PROB" in text
+        # Raw unescaped underscores must not appear (only escaped ones should)
+        assert not re.search(r"(?<!\\)COIN_FLIP", text)
+        assert not re.search(r"(?<!\\)LOW_PROB", text)
+
+    def test_format_parlay_safe_exclusion_reasons_with_underscores_escaped(self):
+        import re
+        legs = [
+            {
+                "match": "X vs Y",
+                "pick": "Victoria X",
+                "prob": 80.0,
+                "league": "Test",
+                "confidence": "ALTA",
+                "market_type": "moneyline",
+                "sport_emoji": "⚽",
+                "risk_reasons": [],
+            }
+        ]
+        report = {
+            "total_candidates": 5,
+            "legs_selected": 1,
+            "exclusions": {"LOW_CONF": 2, "HIGH_RISK": 1},
+        }
+        text = format_parlay_safe(legs, report)
+        assert "LOW\\_CONF" in text
+        assert "HIGH\\_RISK" in text
+        assert not re.search(r"(?<!\\)LOW_CONF", text)
+        assert not re.search(r"(?<!\\)HIGH_RISK", text)

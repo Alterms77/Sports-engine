@@ -1609,7 +1609,7 @@ def format_parlay_dream(bundles: list, parlay_id: str = "",
 
             # Tournament / stage badge — only for notable stages
             if stage_label and stage_key not in ("regular", ""):
-                badge = f"  _{stage_label}_"
+                badge = f"  _{_md_escape(stage_label)}_"
                 if tournament_s and tournament_s not in (
                     "NBA", "NFL", "MLB", "soccer", "Soccer"
                 ):

@@ -1264,7 +1264,7 @@ async def top_picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         home = pred.get("home", "?")
         away = pred.get("away", "?")
         league = pred.get("league", "")
-        league_str = f" _({league})_" if league else ""
+        league_str = f" _({_md(league)})_" if league else ""
         # Find the best outcome label
         probs = {
             f"Victoria {home}": pred.get("home_win", 0),
@@ -1276,8 +1276,8 @@ async def top_picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if pred.get("xg_home") and pred.get("xg_away"):
             xg_line = f" | xG {pred['xg_home']:.1f}-{pred['xg_away']:.1f}"
         lines.append(
-            f"*{rank}.* {c_emoji} {home} vs {away}{league_str}\n"
-            f"   ➤ {best_label} `{best_prob:.1f}%`{xg_line}"
+            f"*{rank}.* {c_emoji} {_md(home)} vs {_md(away)}{league_str}\n"
+            f"   ➤ {_md(best_label)} `{best_prob:.1f}%`{xg_line}"
         )
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
@@ -1307,7 +1307,7 @@ async def h2h_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     away = away_raw.strip()
 
     await update.message.reply_text(
-        f"🔄 Buscando historial *{home}* vs *{away}*…",
+        f"🔄 Buscando historial *{_md(home)}* vs *{_md(away)}*…",
         parse_mode="Markdown",
     )
 
@@ -1327,7 +1327,7 @@ async def h2h_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             h2h = pred.get("h2h", {})
             if not h2h or h2h.get("total", 0) < 1:
                 await update.message.reply_text(
-                    f"📭 No se encontró historial H2H para *{home}* vs *{away}*.\n\n"
+                    f"📭 No se encontró historial H2H para *{_md(home)}* vs *{_md(away)}*.\n\n"
                     "_Los datos de H2H requieren que ambos equipos estén en la base de datos._",
                     parse_mode="Markdown",
                 )
@@ -1338,11 +1338,11 @@ async def h2h_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             aw   = h2h.get("away_wins", 0)
             avg  = h2h.get("avg_goals", 0.0)
             text = (
-                f"🔄 *H2H: {home} vs {away}*\n\n"
+                f"🔄 *H2H: {_md(home)} vs {_md(away)}*\n\n"
                 f"  Últimos {n} enfrentamientos\n"
-                f"  🏠 {home}: *{hw}* victorias\n"
+                f"  🏠 {_md(home)}: *{hw}* victorias\n"
                 f"  🤝 Empates: *{d}*\n"
-                f"  ✈️ {away}: *{aw}* victorias\n"
+                f"  ✈️ {_md(away)}: *{aw}* victorias\n"
                 f"  ⚽ Promedio de goles: *{avg:.2f}* por partido\n"
             )
             await update.message.reply_text(text, parse_mode="Markdown")
@@ -1373,12 +1373,12 @@ async def h2h_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         n = len(records)
 
         lines = [
-            f"🔄 *H2H: {home} vs {away}*",
+            f"🔄 *H2H: {_md(home)} vs {_md(away)}*",
             f"_Basado en {n} enfrentamientos_",
             "",
-            f"🏠 *{home}*: {home_wins} victorias ({home_wins/n*100:.0f}%)",
+            f"🏠 *{_md(home)}*: {home_wins} victorias ({home_wins/n*100:.0f}%)",
             f"🤝 Empates: {draws} ({draws/n*100:.0f}%)",
-            f"✈️ *{away}*: {away_wins} victorias ({away_wins/n*100:.0f}%)",
+            f"✈️ *{_md(away)}*: {away_wins} victorias ({away_wins/n*100:.0f}%)",
             "",
             f"⚽ Promedio goles/partido: *{avg_goals:.2f}*",
             f"🔵 BTTS (ambos anotan): *{btts}/{n}* ({btts/n*100:.0f}%)",
@@ -1395,8 +1395,8 @@ async def h2h_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 rh = r.get("home", home_r)
                 ra = r.get("away", away_r)
                 dt = r.get("date", "")
-                date_str = f" _{dt}_" if dt else ""
-                lines.append(f"  • {rh} {hg}-{ag} {ra}{date_str}")
+                date_str = f" _{_md(str(dt))}_" if dt else ""
+                lines.append(f"  • {_md(rh)} {hg}-{ag} {_md(ra)}{date_str}")
 
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
@@ -1449,13 +1449,13 @@ async def pronosticos_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         best_label = max(probs, key=probs.get)
         best_pct   = probs[best_label]
         league     = pred.get("league", "")
-        league_str = f" _({league})_" if league else ""
+        league_str = f" _({_md(league)})_" if league else ""
         xg_line    = ""
         if pred.get("xg_home") and pred.get("xg_away"):
             xg_line = f"\n   xG: `{pred['xg_home']:.2f} – {pred['xg_away']:.2f}`"
         alta_picks.append(
-            f"🔥 *{pred['home']} vs {pred['away']}*{league_str}\n"
-            f"   ✅ Pick: {best_label} `({best_pct:.1f}%)`{xg_line}"
+            f"🔥 *{_md(pred['home'])} vs {_md(pred['away'])}*{league_str}\n"
+            f"   ✅ Pick: {_md(best_label)} `({best_pct:.1f}%)`{xg_line}"
         )
 
     if not alta_picks:
@@ -1631,9 +1631,9 @@ async def tendencia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tips = suggest_teams(team_raw)
             tip_str = ""
             if tips:
-                tip_str = "\n\n¿Quisiste decir?\n" + "\n".join(f"  • {s}" for s in tips)
+                tip_str = "\n\n¿Quisiste decir?\n" + "\n".join(f"  • {_md(s)}" for s in tips)
             await update.message.reply_text(
-                f"❌ No se encontraron datos para *{team_raw}*.{tip_str}",
+                f"❌ No se encontraron datos para *{_md(team_raw)}*.{tip_str}",
                 parse_mode="Markdown",
             )
             return
@@ -1868,10 +1868,10 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cs_home_pct = f"{s['cs_home_prob']*100:.0f}%" if s["cs_home_prob"] is not None else "N/A"
     cs_away_pct = f"{s['cs_away_prob']*100:.0f}%" if s["cs_away_prob"] is not None else "N/A"
-    league_str = f" _{s['league']}_" if s["league"] != "default" else ""
+    league_str = f" _{_md(s['league'])}_" if s["league"] != "default" else ""
 
     text = (
-        f"📊 *Stats: {s['name']}*{league_str}\n\n"
+        f"📊 *Stats: {_md(s['name'])}*{league_str}\n\n"
         f"🏠 *En casa* ({s.get('home_games', '?')} partidos)\n"
         f"  ⚽ Ataque: `{s['home_attack']}` goles/partido\n"
         f"  🛡️ Defensa: `{s['home_defense']}` concedidos/partido\n"
@@ -2361,7 +2361,7 @@ async def liveteam(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     team_name = " ".join(context.args)
-    await update.message.reply_text(f"⏳ Buscando datos de *{team_name}*…", parse_mode="Markdown")
+    await update.message.reply_text(f"⏳ Buscando datos de *{_md(team_name)}*…", parse_mode="Markdown")
 
     try:
         # Fetch live form
@@ -2370,13 +2370,13 @@ async def liveteam(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not form and not fixtures:
             await update.message.reply_text(
-                f"📭 No se encontraron datos en vivo para *{team_name}*.\n\n"
-                f"Prueba `/stats {team_name}` para estadísticas del historial.",
+                f"📭 No se encontraron datos en vivo para *{_md(team_name)}*.\n\n"
+                f"Prueba `/stats {_md(team_name)}` para estadísticas del historial.",
                 parse_mode="Markdown",
             )
             return
 
-        text_parts = [f"📡 *{team_name}* — datos en vivo\n"]
+        text_parts = [f"📡 *{_md(team_name)}* — datos en vivo\n"]
 
         if form and form.get("matches"):
             source = form.get("source", "?").capitalize()
@@ -2384,7 +2384,7 @@ async def liveteam(update: Update, context: ContextTypes.DEFAULT_TYPE):
             avg_conceded = form.get("defense", 0)
             last5 = form.get("last5", "?????")
             text_parts.append(
-                f"📈 *Últimos resultados* _{source}_\n"
+                f"📈 *Últimos resultados* _{_md(source)}_\n"
                 f"  Forma: `{last5}` | Prom. `{avg_scored}` goles / `{avg_conceded}` concedidos"
             )
             results_str = format_last_results(form["matches"], team_name)
@@ -2438,21 +2438,21 @@ async def tabla(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     league_name = aliases.get(league_name.replace(" ", ""), league_name)
 
-    await update.message.reply_text(f"⏳ Cargando tabla de *{league_name}*…", parse_mode="Markdown")
+    await update.message.reply_text(f"⏳ Cargando tabla de *{_md(league_name)}*…", parse_mode="Markdown")
 
     try:
         table = get_league_table(league_name)
 
         if not table:
             await update.message.reply_text(
-                f"📭 No se encontró la tabla de *{league_name}*.\n\n"
+                f"📭 No se encontró la tabla de *{_md(league_name)}*.\n\n"
                 f"Usa `/tabla Premier League`, `/tabla La Liga`, etc.",
                 parse_mode="Markdown",
             )
             return
 
         rows = table[:20]  # top 20
-        header = f"🏆 *{league_name}*\n\n"
+        header = f"🏆 *{_md(league_name)}*\n\n"
         header += "`Pos  Equipo              PJ  G  E  P  GF GA Pts`\n"
         lines = []
         for r in rows:
