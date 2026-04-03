@@ -794,7 +794,8 @@ class TestFormatParlayReport:
         parlays = build_parlays(_make_legs([85.0, 82.0, 80.0]))
         text = format_parlay(parlays, report=report)
         assert "excluido" in text.lower()
-        assert "LOW_CONF" in text
+        # Keys are escaped for Markdown v1 — underscores become \_
+        assert "LOW\\_CONF" in text
 
     def test_report_none_falls_back_to_filtered_count(self):
         parlays = build_parlays(_make_legs([85.0, 82.0]))

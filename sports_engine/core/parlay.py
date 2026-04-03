@@ -1209,7 +1209,7 @@ def format_parlay(
     if report and report.get("exclusions"):
         excl = report["exclusions"]
         total_excl = sum(excl.values())
-        parts = ", ".join(f"{k}={v}" for k, v in sorted(excl.items()))
+        parts = ", ".join(f"{_md_escape(k)}={v}" for k, v in sorted(excl.items()))
         lines.append(
             f"🔍 _{total_excl} partido(s) excluido(s): {parts}_"
         )
@@ -1731,7 +1731,7 @@ def format_parlay_safe(
     lines.append(f"  Legs elegidas: `{sel}`")
     if excl:
         for reason, cnt in sorted(excl.items(), key=lambda x: -x[1]):
-            lines.append(f"  {reason}: `{cnt}`")
+            lines.append(f"  {_md_escape(reason)}: `{cnt}`")
     lines.append("")
 
     if parlay_id:

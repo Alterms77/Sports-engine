@@ -1139,7 +1139,7 @@ async def manana(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not matches:
             sport_label = arg.upper()
             await update.message.reply_text(
-                f"📭 Sin partidos de *{sport_label}* para mañana ({tomorrow_label}).",
+                f"📭 Sin partidos de *{_md(sport_label)}* para mañana ({_md(tomorrow_label)}).",
                 parse_mode="Markdown",
             )
             return
@@ -1168,8 +1168,8 @@ async def manana(update: Update, context: ContextTypes.DEFAULT_TYPE):
         emoji, label = _sport_meta.get(sport_key, ("🏟️", sport_key.upper()))
         lines = [f"{emoji} *{label} — {tomorrow_label}*", ""]
         for m in sport_matches:
-            league = f" _{m['league']}_" if m.get("league") and m["league"] != label else ""
-            lines.append(f"  • {m['home']} vs {m['away']}{league}")
+            league = f" _{_md(m['league'])}_" if m.get("league") and m["league"] != label else ""
+            lines.append(f"  • {_md(m['home'])} vs {_md(m['away'])}{league}")
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
@@ -2596,7 +2596,7 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total = report.get("total_candidates", len(predictions))
         excl  = report.get("exclusions", {})
         excl_str = ", ".join(
-            f"{k}={v}" for k, v in sorted(excl.items(), key=lambda x: -x[1])
+            f"{_md(k)}={v}" for k, v in sorted(excl.items(), key=lambda x: -x[1])
         ) if excl else "ninguno"
 
         # Show top near-miss picks so the user understands the quality bar
@@ -2650,6 +2650,7 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parlay_id=parlay_id,
         report=report,
     )
+    logger.debug("parlay_command: sending message (%d chars): %r", len(text), text[:200])
     try:
         await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as exc:
@@ -2736,6 +2737,7 @@ async def parlay_safe_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.warning("parlay_safe_command: could not save to history: %s", exc)
 
     text = format_parlay_safe(legs, report, parlay_id=parlay_id)
+    logger.debug("parlay_safe_command: sending message (%d chars): %r", len(text), text[:200])
     try:
         await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as exc:
@@ -2877,6 +2879,7 @@ async def parlay_dream_command(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception:
         pass  # freshness indicator is best-effort
 
+    logger.debug("parlay_dream_command: sending message (%d chars): %r", len(text), text[:200])
     try:
         await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as exc:
