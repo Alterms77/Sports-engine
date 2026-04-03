@@ -329,6 +329,16 @@ def predict_game(home_name: str, away_name: str) -> dict:
     )
     game_totals = nba_game_totals(expected_home, expected_away)
 
+    # ── Team statistical leaders from ESPN (scorer / rebounder / assists) ──────
+    home_leaders: dict = {}
+    away_leaders: dict = {}
+    try:
+        from api.espn_api import get_nba_team_leaders
+        home_leaders = get_nba_team_leaders(home_name)
+        away_leaders = get_nba_team_leaders(away_name)
+    except Exception as exc:
+        logger.debug("ESPN NBA leaders unavailable: %s", exc)
+
     return {
         "sport": "NBA 🏀",
         "home": home_name,
@@ -359,4 +369,7 @@ def predict_game(home_name: str, away_name: str) -> dict:
         "quarter_projections": quarters,
         "player_props": player_props,
         "game_totals": game_totals,
+        # Season statistical leaders (ESPN live data when available)
+        "home_leaders": home_leaders,
+        "away_leaders": away_leaders,
     }

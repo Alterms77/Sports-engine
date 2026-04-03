@@ -249,6 +249,18 @@ def predict_game(home_name: str, away_name: str) -> dict:
     except Exception as exc:
         logger.debug("Sportradar MLB starters unavailable: %s", exc)
 
+    # ESPN fallback: if Sportradar didn't return starters, try ESPN scoreboard
+    # which includes a "probables" field with the scheduled starting pitcher.
+    if not starters.get("home_pitcher") and not starters.get("away_pitcher"):
+        try:
+            from api.espn_api import get_mlb_probable_starters
+            espn_starters = get_mlb_probable_starters(home_name, away_name)
+            if espn_starters:
+                starters = espn_starters
+                logger.debug("Using ESPN probable starters for %s vs %s", home_name, away_name)
+        except Exception as exc:
+            logger.debug("ESPN MLB starters fallback failed: %s", exc)
+
     home_pitcher_info = starters.get("home_pitcher")
     away_pitcher_info = starters.get("away_pitcher")
 
