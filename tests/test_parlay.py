@@ -1167,6 +1167,7 @@ class TestExclusionKeyEscaping:
         }
         parlays = build_parlays(_make_legs([85.0, 82.0]))
         text = format_parlay(parlays, report=report)
+        # Keys must appear (escaped) in the output
         assert "COIN\\_FLIP" in text
         assert "LOW\\_PROB" in text
         # Raw unescaped underscores must not appear (only escaped ones should)
@@ -1193,6 +1194,7 @@ class TestExclusionKeyEscaping:
             "exclusions": {"LOW_CONF": 2, "HIGH_RISK": 1},
         }
         text = format_parlay_safe(legs, report)
+        # Keys must appear (escaped) in the output
         assert "LOW\\_CONF" in text
         assert "HIGH\\_RISK" in text
         assert not re.search(r"(?<!\\)LOW_CONF", text)

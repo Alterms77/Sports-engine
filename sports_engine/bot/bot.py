@@ -1395,7 +1395,7 @@ async def h2h_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 rh = r.get("home", home_r)
                 ra = r.get("away", away_r)
                 dt = r.get("date", "")
-                date_str = f" _{_md(str(dt))}_" if dt else ""
+                date_str = f" _{_md(dt)}_" if dt else ""
                 lines.append(f"  • {_md(rh)} {hg}-{ag} {_md(ra)}{date_str}")
 
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
