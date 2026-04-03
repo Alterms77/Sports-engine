@@ -29,6 +29,17 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+def _md(text: str) -> str:
+    """Escape Telegram Markdown v1 special characters in dynamic content."""
+    return (
+        str(text)
+        .replace("_", r"\_")
+        .replace("*", r"\*")
+        .replace("`", r"\`")
+        .replace("[", r"\[")
+    )
+
+
 # ── Lazy imports (prevent crashes if one source module has issues) ─────────────
 
 def _sofascore():
@@ -270,12 +281,12 @@ def format_live_event(ev: dict) -> str:
     if is_live and hs != "" and as_ != "":
         score_str = f"`{hs}-{as_}`"
         if minute:
-            return f"🔴 {home} {score_str} {away} _{tourn}_"
-        return f"🔴 {home} {score_str} {away}"
+            return f"🔴 {_md(home)} {score_str} {_md(away)} _{_md(tourn)}_"
+        return f"🔴 {_md(home)} {score_str} {_md(away)}"
     elif hs != "" and as_ != "":
-        return f"✅ {home} `{hs}-{as_}` {away} _{tourn}_"
+        return f"✅ {_md(home)} `{hs}-{as_}` {_md(away)} _{_md(tourn)}_"
     else:
-        return f"⏰ {home} vs {away} _{tourn}_"
+        return f"⏰ {_md(home)} vs {_md(away)} _{_md(tourn)}_"
 
 
 def format_live_scoreboard(events: list, max_items: int = 12) -> str:
@@ -292,7 +303,7 @@ def format_live_scoreboard(events: list, max_items: int = 12) -> str:
     lines = []
     total = 0
     for tourn, evs in list(by_tourn.items())[:6]:  # cap at 6 tournaments
-        lines.append(f"*{tourn}*")
+        lines.append(f"*{_md(tourn)}*")
         for ev in evs[:4]:  # cap at 4 per tournament
             lines.append(f"  {format_live_event(ev)}")
             total += 1
@@ -317,8 +328,8 @@ def format_fixture_list(fixtures: list) -> str:
         away = f.get("away", "?")
         league = f.get("tournament") or f.get("league", "")
         dt_str = f"{date} {time_}".strip() if time_ else date
-        league_str = f" _{league}_" if league else ""
-        lines.append(f"📅 `{dt_str}` — {home} vs {away}{league_str}")
+        league_str = f" _{_md(league)}_" if league else ""
+        lines.append(f"📅 `{dt_str}` — {_md(home)} vs {_md(away)}{league_str}")
     return "\n".join(lines)
 
 

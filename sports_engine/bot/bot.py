@@ -2280,7 +2280,7 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not events:
             await update.message.reply_text(
-                f"{sport_emoji} *{sport.capitalize()}*\n\n"
+                f"{sport_emoji} *{_md(sport.capitalize())}*\n\n"
                 f"📭 No hay partidos en vivo en este momento.\n\n"
                 f"Prueba `/scores` para ver resultados del día.",
                 parse_mode="Markdown",
@@ -2289,7 +2289,7 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         scoreboard = format_live_scoreboard(events)
         await update.message.reply_text(
-            f"{sport_emoji} *LIVE — {sport.upper()}*\n\n{scoreboard}",
+            f"{sport_emoji} *LIVE — {_md(sport.upper())}*\n\n{scoreboard}",
             parse_mode="Markdown",
         )
     except Exception as exc:
@@ -2339,7 +2339,7 @@ async def scores(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         scoreboard = format_live_scoreboard(events, max_items=20)
         await update.message.reply_text(
-            f"{sport_emoji} *{sport.upper()} — {label}*\n\n{scoreboard}",
+            f"{sport_emoji} *{_md(sport.upper())} — {_md(label)}*\n\n{scoreboard}",
             parse_mode="Markdown",
         )
     except Exception as exc:
@@ -3524,7 +3524,7 @@ async def scanner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             scans = [s for s in scans if sport_filter in s.sport.lower()]
             if not scans:
                 await update.message.reply_text(
-                    f"📭 No hay mercados de *{sport_filter}* en seguimiento.",
+                    f"📭 No hay mercados de *{_md(sport_filter)}* en seguimiento.",
                     parse_mode="Markdown",
                 )
                 return
