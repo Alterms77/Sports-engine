@@ -14,6 +14,15 @@ Model: Elo-based win probability with surface adjustment.
     best-of-3:  P(win) = p² + 2p²(1−p)     (win 2-0 or 2-1)
     best-of-5:  P(win) = p³(1 + 3q + 6q²)  (win 3-0, 3-1, or 3-2)
 
+Dynamic Elo
+-----------
+  Results can be recorded via ``record_tennis_result()`` which persists the
+  updated ratings to ``data/tennis_elo.json``.  The system uses:
+    * K-factor 32 (base) · recency_weight (more recent → higher K)
+    * Surface-specific sub-ratings (separate Elo per surface per player)
+    * Elo damping: after each update, ratings regress 3 % toward base Elo
+      to prevent extreme drift from a small number of matches.
+
 ATP ranking → Elo approximation (inverse log scale):
   rank 1    ≈ 2400 Elo
   rank 10   ≈ 2200
@@ -22,11 +31,163 @@ ATP ranking → Elo approximation (inverse log scale):
   rank 200+ ≈ 1850
 """
 
+import json
 import math
 import logging
+import os
+from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+# ── Dynamic Elo persistence ───────────────────────────────────────────────────
+
+_TENNIS_ELO_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data",
+    "tennis_elo.json",
+)
+
+# K-factor: base value.  Multiplied by recency_weight (1.0 for today,
+# decays toward 0.5 over ~30 matches to give more weight to recent form).
+_K_BASE = 32.0
+# Damping: after each update, each rating regresses this fraction toward
+# the player's "anchor" (hardcoded _KNOWN_ELO or ranking-derived base).
+_ELO_DAMPING = 0.03
+
+
+def _tennis_elo_data() -> dict:
+    """
+    Load dynamic tennis Elo store from JSON.
+
+    Structure::
+
+        {
+          "ratings": {"Player Name": float, ...},
+          "surface_ratings": {
+              "Player Name": {"hard": float, "clay": float, "grass": float}
+          },
+          "match_counts": {"Player Name": int},
+          "last_updated": "ISO8601"
+        }
+    """
+    if not os.path.exists(_TENNIS_ELO_FILE):
+        return {"ratings": {}, "surface_ratings": {}, "match_counts": {}, "last_updated": ""}
+    try:
+        with open(_TENNIS_ELO_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        logger.warning("Cannot load tennis_elo.json: %s", exc)
+        return {"ratings": {}, "surface_ratings": {}, "match_counts": {}, "last_updated": ""}
+
+
+def _save_tennis_elo(data: dict) -> None:
+    """Persist dynamic Elo store to JSON."""
+    os.makedirs(os.path.dirname(_TENNIS_ELO_FILE), exist_ok=True)
+    data["last_updated"] = datetime.now(timezone.utc).isoformat()
+    try:
+        with open(_TENNIS_ELO_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as exc:
+        logger.warning("Cannot save tennis_elo.json: %s", exc)
+
+
+def record_tennis_result(
+    winner: str,
+    loser: str,
+    surface: str = "hard",
+    is_slam: bool = False,
+) -> dict:
+    """
+    Record a tennis match result and update dynamic Elo ratings.
+
+    Parameters
+    ----------
+    winner  : str  — full player name (e.g. "Carlos Alcaraz")
+    loser   : str  — full player name
+    surface : str  — "hard" | "clay" | "grass"
+    is_slam : bool — True for Grand Slam matches (higher K-factor)
+
+    Returns
+    -------
+    dict with keys ``winner_elo``, ``loser_elo``,
+    ``winner_surface_elo``, ``loser_surface_elo``, ``delta``.
+    """
+    surface = surface.lower().strip()
+    if surface not in ("clay", "grass", "hard"):
+        surface = "hard"
+
+    data     = _tennis_elo_data()
+    ratings  = data.setdefault("ratings", {})
+    surf_rtg = data.setdefault("surface_ratings", {})
+    counts   = data.setdefault("match_counts", {})
+
+    # Base Elo (overall) — seed from hardcoded table when first seen
+    def _seed(name: str) -> float:
+        if name not in ratings:
+            ratings[name] = float(_KNOWN_ELO.get(name, ranking_to_elo(80)))
+        return ratings[name]
+
+    w_elo = _seed(winner)
+    l_elo = _seed(loser)
+
+    # Surface sub-ratings — seeded from base Elo when first seen
+    surf_rtg.setdefault(winner, {})
+    surf_rtg.setdefault(loser,  {})
+    w_surf = surf_rtg[winner].setdefault(surface, w_elo)
+    l_surf = surf_rtg[loser].setdefault(surface,  l_elo)
+
+    # Recency weighting: K shrinks as the average match count grows (stability).
+    # avg_n = average of both players' recorded match counts.
+    # recency_weight = 1.0 when avg_n = 0, decays to 0.5 when avg_n = 100
+    # (i.e., ~100 matches per player on average → divisor 200 → weight = 0.5).
+    w_n = counts.get(winner, 0)
+    l_n = counts.get(loser,  0)
+    avg_n = (w_n + l_n) / 2.0
+    recency_weight = max(0.5, 1.0 - avg_n / 200.0)
+
+    k = _K_BASE * recency_weight * (1.5 if is_slam else 1.0)
+
+    # Elo update (winner gets 1.0, loser gets 0.0)
+    exp_w = 1.0 / (1.0 + 10.0 ** ((l_elo - w_elo) / 400.0))
+    exp_l = 1.0 - exp_w
+    delta_overall = k * (1.0 - exp_w)
+
+    new_w_elo = w_elo + delta_overall
+    new_l_elo = l_elo - delta_overall
+
+    # Surface sub-rating update
+    exp_w_surf = 1.0 / (1.0 + 10.0 ** ((l_surf - w_surf) / 400.0))
+    delta_surf = k * (1.0 - exp_w_surf)
+    new_w_surf = w_surf + delta_surf
+    new_l_surf = l_surf - delta_surf
+
+    # Elo damping — regress toward anchor (prevents extreme drift)
+    anchor_w = float(_KNOWN_ELO.get(winner, ranking_to_elo(80)))
+    anchor_l = float(_KNOWN_ELO.get(loser,  ranking_to_elo(80)))
+    new_w_elo  = new_w_elo  * (1 - _ELO_DAMPING) + anchor_w * _ELO_DAMPING
+    new_l_elo  = new_l_elo  * (1 - _ELO_DAMPING) + anchor_l * _ELO_DAMPING
+    new_w_surf = new_w_surf * (1 - _ELO_DAMPING) + anchor_w * _ELO_DAMPING
+    new_l_surf = new_l_surf * (1 - _ELO_DAMPING) + anchor_l * _ELO_DAMPING
+
+    # Persist
+    ratings[winner] = round(new_w_elo, 1)
+    ratings[loser]  = round(new_l_elo, 1)
+    surf_rtg[winner][surface] = round(new_w_surf, 1)
+    surf_rtg[loser][surface]  = round(new_l_surf, 1)
+    counts[winner] = w_n + 1
+    counts[loser]  = l_n + 1
+
+    _save_tennis_elo(data)
+
+    return {
+        "winner_elo":         round(new_w_elo, 1),
+        "loser_elo":          round(new_l_elo, 1),
+        "winner_surface_elo": round(new_w_surf, 1),
+        "loser_surface_elo":  round(new_l_surf, 1),
+        "delta":              round(delta_overall, 1),
+        "surface":            surface,
+    }
 
 
 # ── Surface Elo adjustments ───────────────────────────────────────────────────
@@ -250,19 +411,32 @@ def suggest_players(name: str, top_n: int = 3) -> list:
     return results
 
 
-def _get_player_elo(player_name: str) -> float:
+def _get_player_elo(player_name: str, surface: str = "hard") -> float:
     """Return best-available Elo for a player.
 
     Priority:
-    1. Hardcoded Elo from ``_KNOWN_ELO`` (top players, always available).
-    2. ESPN ATP/WTA ranking → convert via ``ranking_to_elo()``.
-    3. League-default for an unranked / unknown player (rank 100 equivalent).
+    1. Dynamic Elo from ``data/tennis_elo.json`` (surface-specific when available).
+    2. Hardcoded Elo from ``_KNOWN_ELO`` (top players, always available).
+    3. ESPN ATP/WTA ranking → convert via ``ranking_to_elo()``.
+    4. League-default for an unranked / unknown player (rank 100 equivalent).
     """
-    # 1. Hardcoded known Elo
+    # 1. Dynamic persisted Elo (surface-specific if recorded, else overall)
+    try:
+        data = _tennis_elo_data()
+        surf_rtg = data.get("surface_ratings", {}).get(player_name, {})
+        if surface in surf_rtg:
+            return float(surf_rtg[surface])
+        overall = data.get("ratings", {}).get(player_name)
+        if overall is not None:
+            return float(overall)
+    except Exception as exc:
+        logger.debug("Dynamic tennis Elo unavailable for '%s': %s", player_name, exc)
+
+    # 2. Hardcoded known Elo
     if player_name in _KNOWN_ELO:
         return _KNOWN_ELO[player_name]
 
-    # 2. Try ESPN ranking (tennis player search)
+    # 3. Try ESPN ranking (tennis player search)
     try:
         from api.espn_api import get_team_season_stats
         stats = get_team_season_stats("tennis", player_name)
@@ -275,7 +449,7 @@ def _get_player_elo(player_name: str) -> float:
     except Exception as exc:
         logger.debug("ESPN tennis rank unavailable for '%s': %s", player_name, exc)
 
-    # 3. Conservative default — treat as a respectable but unranked player (rank ~80)
+    # 4. Conservative default — treat as a respectable but unranked player (rank ~80)
     return ranking_to_elo(80)
 
 
@@ -312,17 +486,23 @@ def predict_match(
     if surface not in ("clay", "grass", "hard"):
         surface = "hard"
 
-    elo1 = _get_player_elo(player1_name)
-    elo2 = _get_player_elo(player2_name)
+    # Dynamic Elo (surface-specific when available) takes priority over static
+    elo1 = _get_player_elo(player1_name, surface)
+    elo2 = _get_player_elo(player2_name, surface)
 
     # ── Apply surface Elo adjustments ────────────────────────────────────────
-    # Look up each player's surface type and add the corresponding Elo delta
-    # for the surface being played on.  Unknown players are treated as neutral.
+    # Only apply the static surface-type adjustment when the dynamic store does
+    # NOT already have a surface-specific rating for this player (to avoid
+    # double-counting the surface bonus).
+    data = _tennis_elo_data()
+    surf1_dynamic = surface in data.get("surface_ratings", {}).get(player1_name, {})
+    surf2_dynamic = surface in data.get("surface_ratings", {}).get(player2_name, {})
+
     surf_table = SURFACE_ELO_ADJ[surface]
     type1 = _PLAYER_SURFACE_TYPE.get(player1_name, "neutral")
     type2 = _PLAYER_SURFACE_TYPE.get(player2_name, "neutral")
-    elo1_adj = elo1 + surf_table.get(type1, 0)
-    elo2_adj = elo2 + surf_table.get(type2, 0)
+    elo1_adj = elo1 + (0 if surf1_dynamic else surf_table.get(type1, 0))
+    elo2_adj = elo2 + (0 if surf2_dynamic else surf_table.get(type2, 0))
 
     # Per-set win probability using surface-adjusted Elo
     p_set = elo_win_prob(elo1_adj, elo2_adj)
@@ -340,19 +520,27 @@ def predict_match(
 
     best_bet = f"Victoria {favoured} ({lead_prob:.1f}%)"
 
+    counts = data.get("match_counts", {})
+
     return {
         "sport": f"Tenis 🎾 ({surface_emoji} {surface.capitalize()})",
         "home": player1_name,
         "away": player2_name,
         "home_win": p_match,
         "away_win": p_match_opp,
-        "elo_p1": round(elo1),
-        "elo_p2": round(elo2),
+        "elo_p1": round(elo1_adj),
+        "elo_p2": round(elo2_adj),
+        "elo_p1_base": round(elo1),
+        "elo_p2_base": round(elo2),
+        "elo_dynamic_p1": surf1_dynamic or (player1_name in data.get("ratings", {})),
+        "elo_dynamic_p2": surf2_dynamic or (player2_name in data.get("ratings", {})),
+        "matches_recorded_p1": counts.get(player1_name, 0),
+        "matches_recorded_p2": counts.get(player2_name, 0),
         "surface": surface,
         "best_of": best_of,
         "expected_home": None,
         "expected_away": None,
-        "spread": round(elo1 - elo2, 0),
+        "spread": round(elo1_adj - elo2_adj, 0),
         "over_under": None,
         "confidence": conf,
         "best_bet": best_bet,

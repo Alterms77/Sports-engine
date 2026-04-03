@@ -179,18 +179,31 @@ def _format_mlb_stats(pred: dict) -> str:
         f"Carreras proyectadas: {pred.get('expected_home', '?')} — {pred.get('expected_away', '?')}",
         f"Total O/U: {pred.get('over_under', '?')} carreras",
     ]
-    if pred.get("home_pitcher"):
-        hp = pred["home_pitcher"]
-        era = pred.get("home_pitcher_era", "?")
-        whip = pred.get("home_pitcher_whip", "?")
-        k9 = pred.get("home_pitcher_k9", "?")
-        lines.append(f"Pitcher local: {hp} (ERA {era} | WHIP {whip} | K/9 {k9})")
-    if pred.get("away_pitcher"):
-        ap = pred["away_pitcher"]
-        era = pred.get("away_pitcher_era", "?")
-        whip = pred.get("away_pitcher_whip", "?")
-        k9 = pred.get("away_pitcher_k9", "?")
-        lines.append(f"Pitcher visitante: {ap} (ERA {era} | WHIP {whip} | K/9 {k9})")
+
+    def _pitcher_line(name_key: str, era_key: str, whip_key: str, k9_key: str,
+                      hand_key: str, starts_key: str, label: str) -> None:
+        name = pred.get(name_key)
+        if not name:
+            return
+        era   = pred.get(era_key,   "?")
+        whip  = pred.get(whip_key,  "?")
+        k9    = pred.get(k9_key,    "?")
+        hand  = pred.get(hand_key,  "")
+        hand_s = f" [{hand}]" if hand else ""
+        lines.append(f"Pitcher {label}: {name}{hand_s} (ERA {era} | WHIP {whip} | K/9 {k9})")
+        starts = pred.get(starts_key) or []
+        if starts:
+            starts_str = "  ".join(
+                f"{s.get('date','?')} {s.get('ip','?')}IP {s.get('er','?')}CE {s.get('k','?')}K ({s.get('result','?')})"
+                for s in starts
+            )
+            lines.append(f"  Últimas salidas: {starts_str}")
+
+    _pitcher_line("home_pitcher", "home_pitcher_era", "home_pitcher_whip",
+                  "home_pitcher_k9", "home_pitcher_hand", "home_pitcher_recent_starts", "local")
+    _pitcher_line("away_pitcher", "away_pitcher_era", "away_pitcher_whip",
+                  "away_pitcher_k9", "away_pitcher_hand", "away_pitcher_recent_starts", "visitante")
+
     if pred.get("confidence"):
         lines.append(f"Confianza del modelo: {pred['confidence']}")
     return "\n".join(lines)

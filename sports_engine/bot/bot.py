@@ -1139,7 +1139,7 @@ async def manana(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not matches:
             sport_label = arg.upper()
             await update.message.reply_text(
-                f"📭 Sin partidos de *{sport_label}* para mañana ({tomorrow_label}).",
+                f"📭 Sin partidos de *{_md(sport_label)}* para mañana ({_md(tomorrow_label)}).",
                 parse_mode="Markdown",
             )
             return
@@ -1168,8 +1168,8 @@ async def manana(update: Update, context: ContextTypes.DEFAULT_TYPE):
         emoji, label = _sport_meta.get(sport_key, ("🏟️", sport_key.upper()))
         lines = [f"{emoji} *{label} — {tomorrow_label}*", ""]
         for m in sport_matches:
-            league = f" _{m['league']}_" if m.get("league") and m["league"] != label else ""
-            lines.append(f"  • {m['home']} vs {m['away']}{league}")
+            league = f" _{_md(m['league'])}_" if m.get("league") and m["league"] != label else ""
+            lines.append(f"  • {_md(m['home'])} vs {_md(m['away'])}{league}")
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 
@@ -1264,7 +1264,7 @@ async def top_picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         home = pred.get("home", "?")
         away = pred.get("away", "?")
         league = pred.get("league", "")
-        league_str = f" _({league})_" if league else ""
+        league_str = f" _({_md(league)})_" if league else ""
         # Find the best outcome label
         probs = {
             f"Victoria {home}": pred.get("home_win", 0),
@@ -1276,8 +1276,8 @@ async def top_picks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if pred.get("xg_home") and pred.get("xg_away"):
             xg_line = f" | xG {pred['xg_home']:.1f}-{pred['xg_away']:.1f}"
         lines.append(
-            f"*{rank}.* {c_emoji} {home} vs {away}{league_str}\n"
-            f"   ➤ {best_label} `{best_prob:.1f}%`{xg_line}"
+            f"*{rank}.* {c_emoji} {_md(home)} vs {_md(away)}{league_str}\n"
+            f"   ➤ {_md(best_label)} `{best_prob:.1f}%`{xg_line}"
         )
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
@@ -1307,7 +1307,7 @@ async def h2h_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     away = away_raw.strip()
 
     await update.message.reply_text(
-        f"🔄 Buscando historial *{home}* vs *{away}*…",
+        f"🔄 Buscando historial *{_md(home)}* vs *{_md(away)}*…",
         parse_mode="Markdown",
     )
 
@@ -1327,7 +1327,7 @@ async def h2h_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             h2h = pred.get("h2h", {})
             if not h2h or h2h.get("total", 0) < 1:
                 await update.message.reply_text(
-                    f"📭 No se encontró historial H2H para *{home}* vs *{away}*.\n\n"
+                    f"📭 No se encontró historial H2H para *{_md(home)}* vs *{_md(away)}*.\n\n"
                     "_Los datos de H2H requieren que ambos equipos estén en la base de datos._",
                     parse_mode="Markdown",
                 )
@@ -1338,11 +1338,11 @@ async def h2h_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             aw   = h2h.get("away_wins", 0)
             avg  = h2h.get("avg_goals", 0.0)
             text = (
-                f"🔄 *H2H: {home} vs {away}*\n\n"
+                f"🔄 *H2H: {_md(home)} vs {_md(away)}*\n\n"
                 f"  Últimos {n} enfrentamientos\n"
-                f"  🏠 {home}: *{hw}* victorias\n"
+                f"  🏠 {_md(home)}: *{hw}* victorias\n"
                 f"  🤝 Empates: *{d}*\n"
-                f"  ✈️ {away}: *{aw}* victorias\n"
+                f"  ✈️ {_md(away)}: *{aw}* victorias\n"
                 f"  ⚽ Promedio de goles: *{avg:.2f}* por partido\n"
             )
             await update.message.reply_text(text, parse_mode="Markdown")
@@ -1373,12 +1373,12 @@ async def h2h_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         n = len(records)
 
         lines = [
-            f"🔄 *H2H: {home} vs {away}*",
+            f"🔄 *H2H: {_md(home)} vs {_md(away)}*",
             f"_Basado en {n} enfrentamientos_",
             "",
-            f"🏠 *{home}*: {home_wins} victorias ({home_wins/n*100:.0f}%)",
+            f"🏠 *{_md(home)}*: {home_wins} victorias ({home_wins/n*100:.0f}%)",
             f"🤝 Empates: {draws} ({draws/n*100:.0f}%)",
-            f"✈️ *{away}*: {away_wins} victorias ({away_wins/n*100:.0f}%)",
+            f"✈️ *{_md(away)}*: {away_wins} victorias ({away_wins/n*100:.0f}%)",
             "",
             f"⚽ Promedio goles/partido: *{avg_goals:.2f}*",
             f"🔵 BTTS (ambos anotan): *{btts}/{n}* ({btts/n*100:.0f}%)",
@@ -1395,8 +1395,8 @@ async def h2h_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 rh = r.get("home", home_r)
                 ra = r.get("away", away_r)
                 dt = r.get("date", "")
-                date_str = f" _{dt}_" if dt else ""
-                lines.append(f"  • {rh} {hg}-{ag} {ra}{date_str}")
+                date_str = f" _{_md(dt)}_" if dt else ""
+                lines.append(f"  • {_md(rh)} {hg}-{ag} {_md(ra)}{date_str}")
 
         await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
@@ -1449,13 +1449,13 @@ async def pronosticos_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         best_label = max(probs, key=probs.get)
         best_pct   = probs[best_label]
         league     = pred.get("league", "")
-        league_str = f" _({league})_" if league else ""
+        league_str = f" _({_md(league)})_" if league else ""
         xg_line    = ""
         if pred.get("xg_home") and pred.get("xg_away"):
             xg_line = f"\n   xG: `{pred['xg_home']:.2f} – {pred['xg_away']:.2f}`"
         alta_picks.append(
-            f"🔥 *{pred['home']} vs {pred['away']}*{league_str}\n"
-            f"   ✅ Pick: {best_label} `({best_pct:.1f}%)`{xg_line}"
+            f"🔥 *{_md(pred['home'])} vs {_md(pred['away'])}*{league_str}\n"
+            f"   ✅ Pick: {_md(best_label)} `({best_pct:.1f}%)`{xg_line}"
         )
 
     if not alta_picks:
@@ -1631,9 +1631,9 @@ async def tendencia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tips = suggest_teams(team_raw)
             tip_str = ""
             if tips:
-                tip_str = "\n\n¿Quisiste decir?\n" + "\n".join(f"  • {s}" for s in tips)
+                tip_str = "\n\n¿Quisiste decir?\n" + "\n".join(f"  • {_md(s)}" for s in tips)
             await update.message.reply_text(
-                f"❌ No se encontraron datos para *{team_raw}*.{tip_str}",
+                f"❌ No se encontraron datos para *{_md(team_raw)}*.{tip_str}",
                 parse_mode="Markdown",
             )
             return
@@ -1868,10 +1868,10 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cs_home_pct = f"{s['cs_home_prob']*100:.0f}%" if s["cs_home_prob"] is not None else "N/A"
     cs_away_pct = f"{s['cs_away_prob']*100:.0f}%" if s["cs_away_prob"] is not None else "N/A"
-    league_str = f" _{s['league']}_" if s["league"] != "default" else ""
+    league_str = f" _{_md(s['league'])}_" if s["league"] != "default" else ""
 
     text = (
-        f"📊 *Stats: {s['name']}*{league_str}\n\n"
+        f"📊 *Stats: {_md(s['name'])}*{league_str}\n\n"
         f"🏠 *En casa* ({s.get('home_games', '?')} partidos)\n"
         f"  ⚽ Ataque: `{s['home_attack']}` goles/partido\n"
         f"  🛡️ Defensa: `{s['home_defense']}` concedidos/partido\n"
@@ -2014,20 +2014,34 @@ def _format_sport_prediction(pred: dict) -> str:
                     h_era  = pred.get("home_pitcher_era",  pred.get("home_era",  "?"))
                     h_whip = pred.get("home_pitcher_whip", "?")
                     h_k9   = pred.get("home_pitcher_k9",   "?")
+                    h_hand = pred.get("home_pitcher_hand") or ""
                     era_s  = f"`{h_era:.2f}`"  if isinstance(h_era,  float) else f"`{h_era}`"
                     whip_s = f"`{h_whip:.2f}`" if isinstance(h_whip, float) else f"`{h_whip}`"
                     k9_s   = f"`{h_k9:.1f}`"  if isinstance(h_k9,   float) else f"`{h_k9}`"
-                    lines.append(f"  🏠 {_md(home)}: {_md(home_p_name)} — ERA {era_s} WHIP {whip_s} K/9 {k9_s}")
+                    hand_s = f" `{h_hand}`" if h_hand else ""
+                    lines.append(f"  🏠 {_md(home)}: {_md(home_p_name)}{hand_s} — ERA {era_s} WHIP {whip_s} K/9 {k9_s}")
+                    h_starts = pred.get("home_pitcher_recent_starts") or []
+                    if h_starts:
+                        lines.append("    📋 Últimas salidas: `Fecha  IP  CE   K  Res`")
+                        for s in h_starts:
+                            lines.append(f"    `{s.get('date','?'):>5}  {s.get('ip','?'):>4}  {s.get('er','?'):>2}  {s.get('k','?'):>3}  {s.get('result','?')}`")
                 elif pred.get("home_era"):
                     lines.append(f"  ERA pitcheo — {_md(home)}: `{pred['home_era']}`")
                 if away_p_name:
                     a_era  = pred.get("away_pitcher_era",  pred.get("away_era",  "?"))
                     a_whip = pred.get("away_pitcher_whip", "?")
                     a_k9   = pred.get("away_pitcher_k9",   "?")
+                    a_hand = pred.get("away_pitcher_hand") or ""
                     era_s  = f"`{a_era:.2f}`"  if isinstance(a_era,  float) else f"`{a_era}`"
                     whip_s = f"`{a_whip:.2f}`" if isinstance(a_whip, float) else f"`{a_whip}`"
                     k9_s   = f"`{a_k9:.1f}`"  if isinstance(a_k9,   float) else f"`{a_k9}`"
-                    lines.append(f"  ✈️ {_md(away)}: {_md(away_p_name)} — ERA {era_s} WHIP {whip_s} K/9 {k9_s}")
+                    hand_s = f" `{a_hand}`" if a_hand else ""
+                    lines.append(f"  ✈️ {_md(away)}: {_md(away_p_name)}{hand_s} — ERA {era_s} WHIP {whip_s} K/9 {k9_s}")
+                    a_starts = pred.get("away_pitcher_recent_starts") or []
+                    if a_starts:
+                        lines.append("    📋 Últimas salidas: `Fecha  IP  CE   K  Res`")
+                        for s in a_starts:
+                            lines.append(f"    `{s.get('date','?'):>5}  {s.get('ip','?'):>4}  {s.get('er','?'):>2}  {s.get('k','?'):>3}  {s.get('result','?')}`")
                 elif pred.get("away_era"):
                     lines.append(f"  ERA pitcheo — {_md(away)}: `{pred['away_era']}`")
 
@@ -2055,9 +2069,22 @@ def _format_sport_prediction(pred: dict) -> str:
     if "Tenis" in sport:
         lines.append(f"🎾 *Superficie:* {pred.get('surface', 'hard').capitalize()}")
         lines.append(f"📏 *Formato:* Mejor de {pred.get('best_of', 3)}")
-        lines.append(f"📊 *Elo aproximado*")
-        lines.append(f"  {_md(home)}: `{pred.get('elo_p1', '?')}`")
-        lines.append(f"  {_md(away)}: `{pred.get('elo_p2', '?')}`\n")
+        dyn1 = pred.get("elo_dynamic_p1", False)
+        dyn2 = pred.get("elo_dynamic_p2", False)
+        dyn_note1 = " 🔄" if dyn1 else " 📌"
+        dyn_note2 = " 🔄" if dyn2 else " 📌"
+        n1 = pred.get("matches_recorded_p1", 0)
+        n2 = pred.get("matches_recorded_p2", 0)
+        n1_s = f" ({n1} partidos)" if n1 else ""
+        n2_s = f" ({n2} partidos)" if n2 else ""
+        lines.append(f"📊 *Elo {'dinámico' if (dyn1 or dyn2) else 'estimado'}*")
+        lines.append(f"  {_md(home)}:{dyn_note1} `{pred.get('elo_p1', '?')}`{n1_s}")
+        lines.append(f"  {_md(away)}:{dyn_note2} `{pred.get('elo_p2', '?')}`{n2_s}")
+        if dyn1 or dyn2:
+            lines.append("  _🔄 = Elo actualizado con resultados reales_")
+        else:
+            lines.append("  _📌 = Elo estimado — usa `/elo_update` para mejorar la precisión_")
+        lines.append("")
 
     lines.append(f"💡 *Mejor Pick:* {_md(pred['best_bet'])}")
     lines.append(f"{conf_emoji} *Confianza:* {conf}")
@@ -2080,7 +2107,9 @@ async def sports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  `/mlb LOCAL vs VISITANTE`\n\n"
         "🏈 *NFL* — spread, O/U, cuartos, props QB/RB/WR\n"
         "  `/nfl LOCAL vs VISITANTE`\n\n"
-        "🎾 *Tenis* — `/tennis J1 vs J2 [clay/grass/hard]`\n\n"
+        "🎾 *Tenis* — Elo dinámico por jugador y superficie\n"
+        "  `/tennis J1 vs J2 [clay/grass/hard]`\n"
+        "  `/elo_update GANADOR vs PERDEDOR [surface] [slam]`\n\n"
         "📡 *Datos en vivo*\n"
         "  `/live [deporte]` — marcadores en vivo ahora\n"
         "  `/scores [deporte]` — partidos de hoy\n"
@@ -2249,6 +2278,73 @@ async def tennis(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error: {exc}{tip}")
 
 
+async def elo_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /elo_update GANADOR vs PERDEDOR [clay/grass/hard] [slam]
+
+    Record a real ATP/WTA match result to update the dynamic Elo ratings.
+    This improves future prediction accuracy for both players.
+
+    Examples:
+      /elo_update Djokovic vs Medvedev hard
+      /elo_update Alcaraz vs Sinner clay slam
+    """
+    if not context.args or " vs " not in " ".join(context.args).lower():
+        await update.message.reply_text(
+            "❌ Formato:\n`/elo_update GANADOR vs PERDEDOR [clay/grass/hard] [slam]`\n\n"
+            "_Ej:_ `/elo_update Djokovic vs Medvedev hard`\n"
+            "_Ej:_ `/elo_update Alcaraz vs Sinner clay slam`\n\n"
+            "Registra el resultado real para actualizar el Elo dinámico.",
+            parse_mode="Markdown",
+        )
+        return
+
+    raw = " ".join(context.args)
+
+    # Extract optional "slam" flag
+    is_slam = False
+    if raw.lower().endswith(" slam"):
+        is_slam = True
+        raw = raw[:-5].strip()
+
+    # Extract optional surface
+    surface = "hard"
+    for surf in ("clay", "grass", "hard"):
+        if raw.lower().endswith(f" {surf}"):
+            surface = surf
+            raw = raw[: -(len(surf) + 1)].strip()
+            break
+
+    if " vs " not in raw.lower():
+        await update.message.reply_text("❌ Usa el formato: `GANADOR vs PERDEDOR [surface]`", parse_mode="Markdown")
+        return
+
+    winner_raw, loser_raw = raw.split(" vs ", 1)
+    winner = _tennis.resolve_player(winner_raw.strip()) or winner_raw.strip()
+    loser  = _tennis.resolve_player(loser_raw.strip())  or loser_raw.strip()
+
+    try:
+        result = _tennis.record_tennis_result(winner, loser, surface=surface, is_slam=is_slam)
+        slam_tag = " 🏆 Grand Slam" if is_slam else ""
+        surf_emoji = {"clay": "🏟️", "grass": "🌱", "hard": "🏢"}.get(surface, "🎾")
+        await update.message.reply_text(
+            f"✅ *Resultado registrado*{slam_tag}\n\n"
+            f"🏆 Ganador: {_md(winner)}\n"
+            f"❌ Perdedor: {_md(loser)}\n"
+            f"Superficie: {surf_emoji} {surface.capitalize()}\n\n"
+            f"📊 *Elo actualizado*\n"
+            f"  {_md(winner)}: `{result['winner_elo']}` _(+{result['delta']:.1f})_\n"
+            f"  {_md(loser)}: `{result['loser_elo']}` _(-{result['delta']:.1f})_\n\n"
+            f"  Elo superficie — {_md(winner)}: `{result['winner_surface_elo']}`\n"
+            f"  Elo superficie — {_md(loser)}: `{result['loser_surface_elo']}`\n\n"
+            f"_Usa `/tennis {_md(winner)} vs {_md(loser)} {surface}` para ver la nueva predicción._",
+            parse_mode="Markdown",
+        )
+    except Exception as exc:
+        logger.exception("Error en /elo_update")
+        await update.message.reply_text(f"❌ Error actualizando Elo: {exc}")
+
+
 # ===============================
 # 📡 COMMANDS — Live data (SofaScore / TheSportsDB / ESPN)
 # ===============================
@@ -2280,7 +2376,7 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not events:
             await update.message.reply_text(
-                f"{sport_emoji} *{sport.capitalize()}*\n\n"
+                f"{sport_emoji} *{_md(sport.capitalize())}*\n\n"
                 f"📭 No hay partidos en vivo en este momento.\n\n"
                 f"Prueba `/scores` para ver resultados del día.",
                 parse_mode="Markdown",
@@ -2289,7 +2385,7 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         scoreboard = format_live_scoreboard(events)
         await update.message.reply_text(
-            f"{sport_emoji} *LIVE — {sport.upper()}*\n\n{scoreboard}",
+            f"{sport_emoji} *LIVE — {_md(sport.upper())}*\n\n{scoreboard}",
             parse_mode="Markdown",
         )
     except Exception as exc:
@@ -2339,7 +2435,7 @@ async def scores(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         scoreboard = format_live_scoreboard(events, max_items=20)
         await update.message.reply_text(
-            f"{sport_emoji} *{sport.upper()} — {label}*\n\n{scoreboard}",
+            f"{sport_emoji} *{_md(sport.upper())} — {_md(label)}*\n\n{scoreboard}",
             parse_mode="Markdown",
         )
     except Exception as exc:
@@ -2361,7 +2457,7 @@ async def liveteam(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     team_name = " ".join(context.args)
-    await update.message.reply_text(f"⏳ Buscando datos de *{team_name}*…", parse_mode="Markdown")
+    await update.message.reply_text(f"⏳ Buscando datos de *{_md(team_name)}*…", parse_mode="Markdown")
 
     try:
         # Fetch live form
@@ -2370,13 +2466,13 @@ async def liveteam(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not form and not fixtures:
             await update.message.reply_text(
-                f"📭 No se encontraron datos en vivo para *{team_name}*.\n\n"
-                f"Prueba `/stats {team_name}` para estadísticas del historial.",
+                f"📭 No se encontraron datos en vivo para *{_md(team_name)}*.\n\n"
+                f"Prueba `/stats {_md(team_name)}` para estadísticas del historial.",
                 parse_mode="Markdown",
             )
             return
 
-        text_parts = [f"📡 *{team_name}* — datos en vivo\n"]
+        text_parts = [f"📡 *{_md(team_name)}* — datos en vivo\n"]
 
         if form and form.get("matches"):
             source = form.get("source", "?").capitalize()
@@ -2384,7 +2480,7 @@ async def liveteam(update: Update, context: ContextTypes.DEFAULT_TYPE):
             avg_conceded = form.get("defense", 0)
             last5 = form.get("last5", "?????")
             text_parts.append(
-                f"📈 *Últimos resultados* _{source}_\n"
+                f"📈 *Últimos resultados* _{_md(source)}_\n"
                 f"  Forma: `{last5}` | Prom. `{avg_scored}` goles / `{avg_conceded}` concedidos"
             )
             results_str = format_last_results(form["matches"], team_name)
@@ -2438,21 +2534,21 @@ async def tabla(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     league_name = aliases.get(league_name.replace(" ", ""), league_name)
 
-    await update.message.reply_text(f"⏳ Cargando tabla de *{league_name}*…", parse_mode="Markdown")
+    await update.message.reply_text(f"⏳ Cargando tabla de *{_md(league_name)}*…", parse_mode="Markdown")
 
     try:
         table = get_league_table(league_name)
 
         if not table:
             await update.message.reply_text(
-                f"📭 No se encontró la tabla de *{league_name}*.\n\n"
+                f"📭 No se encontró la tabla de *{_md(league_name)}*.\n\n"
                 f"Usa `/tabla Premier League`, `/tabla La Liga`, etc.",
                 parse_mode="Markdown",
             )
             return
 
         rows = table[:20]  # top 20
-        header = f"🏆 *{league_name}*\n\n"
+        header = f"🏆 *{_md(league_name)}*\n\n"
         header += "`Pos  Equipo              PJ  G  E  P  GF GA Pts`\n"
         lines = []
         for r in rows:
@@ -2596,7 +2692,7 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total = report.get("total_candidates", len(predictions))
         excl  = report.get("exclusions", {})
         excl_str = ", ".join(
-            f"{k}={v}" for k, v in sorted(excl.items(), key=lambda x: -x[1])
+            f"{_md(k)}={v}" for k, v in sorted(excl.items(), key=lambda x: -x[1])
         ) if excl else "ninguno"
 
         # Show top near-miss picks so the user understands the quality bar
@@ -2650,6 +2746,7 @@ async def parlay_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parlay_id=parlay_id,
         report=report,
     )
+    logger.debug("parlay_command: sending message (%d chars): %r", len(text), text[:200])
     try:
         await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as exc:
@@ -2736,6 +2833,7 @@ async def parlay_safe_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             logger.warning("parlay_safe_command: could not save to history: %s", exc)
 
     text = format_parlay_safe(legs, report, parlay_id=parlay_id)
+    logger.debug("parlay_safe_command: sending message (%d chars): %r", len(text), text[:200])
     try:
         await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as exc:
@@ -2877,6 +2975,7 @@ async def parlay_dream_command(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception:
         pass  # freshness indicator is best-effort
 
+    logger.debug("parlay_dream_command: sending message (%d chars): %r", len(text), text[:200])
     try:
         await update.message.reply_text(text, parse_mode="Markdown")
     except Exception as exc:
@@ -3521,7 +3620,7 @@ async def scanner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             scans = [s for s in scans if sport_filter in s.sport.lower()]
             if not scans:
                 await update.message.reply_text(
-                    f"📭 No hay mercados de *{sport_filter}* en seguimiento.",
+                    f"📭 No hay mercados de *{_md(sport_filter)}* en seguimiento.",
                     parse_mode="Markdown",
                 )
                 return
@@ -4455,51 +4554,86 @@ async def send_daily_alerts(context: ContextTypes.DEFAULT_TYPE):
 
 # Each entry: (button_label, callback_data)
 # callback_data must be unique and ≤ 64 bytes (Telegram limit).
-_MENU_SECTIONS = [
-    # Section header (displayed as a disabled text row, full width)
-    ("── 🎯 PREDICCIONES ──", None),
-    ("⚽ Predict",   "cmd_predict"),
-    ("🏀 NBA",       "cmd_nba"),
-    ("⚾ MLB",       "cmd_mlb"),
-    ("🏈 NFL",       "cmd_nfl"),
-    ("🎾 Tennis",    "cmd_tennis"),
-    ("🔄 H2H",       "cmd_h2h"),
-    ("🔥 Top Picks", "cmd_top"),
-    ("📈 Tendencia", "cmd_tendencia"),
-
-    ("── 🎰 PARLAYS ──", None),
-    ("🎰 Parlay",        "cmd_parlay"),
-    ("🛡 Parlay Safe",   "cmd_parlay_safe"),
-    ("🌙 Parlay Soñador", "cmd_parlay_dream"),
-    ("📸 Check Parlay",  "cmd_checkparlay"),
-
-    ("── 📅 TODAY ──", None),
-    ("⚽ Fútbol Hoy",  "cmd_today_futbol"),
-    ("🏀 NBA Hoy",     "cmd_today_nba"),
-    ("🏈 NFL Hoy",     "cmd_today_nfl"),
-    ("⚾ MLB Hoy",     "cmd_today_mlb"),
-    ("🎾 Tenis Hoy",   "cmd_today_tenis"),
-    ("📅 Todo Hoy",    "cmd_today"),
-    ("📅 Mañana",      "cmd_manana"),
-    ("🤖 Pronósticos", "cmd_pronosticos"),
-
-    ("── 📊 ESTADÍSTICAS ──", None),
-    ("📊 Estadísticas",  "cmd_estadisticas"),
-    ("📈 Historial",     "cmd_historial"),
-
-    ("── 🛰 SCANNER ──", None),
-    ("🛰 Autoscan",  "cmd_autoscan"),
-    ("🔍 Scanner",   "cmd_scanner"),
-
-    ("── 📡 DATOS EN VIVO ──", None),
-    ("📡 Live",     "cmd_live"),
-    ("📺 Scores",   "cmd_scores"),
-    ("🏆 Tabla",    "cmd_tabla"),
-
-    ("── 🔔 ALERTAS ──", None),
-    ("🔔 Activar alertas",    "cmd_alertas_on"),
-    ("🔕 Desactivar alertas", "cmd_alertas_off"),
-]
+# Two-level menu: /menu shows category buttons; tapping one shows its commands.
+#
+# Structure: section_key → (display_label, [(btn_label, callback_data), ...])
+# The display_label is shown both on the main-menu button and as the sub-menu header.
+_MENU_GROUPS: dict[str, tuple[str, list[tuple[str, str]]]] = {
+    "sec_predicciones": ("🎯 Predicciones", [
+        ("⚽ Predict",   "cmd_predict"),
+        ("🏀 NBA",       "cmd_nba"),
+        ("⚾ MLB",       "cmd_mlb"),
+        ("🏈 NFL",       "cmd_nfl"),
+        ("🎾 Tennis",    "cmd_tennis"),
+        ("🔄 H2H",       "cmd_h2h"),
+        ("🔥 Top Picks", "cmd_top"),
+        ("📈 Tendencia", "cmd_tendencia"),
+    ]),
+    "sec_parlays": ("🎰 Parlays", [
+        ("🎰 Parlay",         "cmd_parlay"),
+        ("🛡 Parlay Safe",    "cmd_parlay_safe"),
+        ("🌙 Parlay Soñador", "cmd_parlay_dream"),
+        ("📸 Check Parlay",   "cmd_checkparlay"),
+    ]),
+    "sec_today": ("📅 Partidos", [
+        ("⚽ Fútbol Hoy",  "cmd_today_futbol"),
+        ("🏀 NBA Hoy",     "cmd_today_nba"),
+        ("🏈 NFL Hoy",     "cmd_today_nfl"),
+        ("⚾ MLB Hoy",     "cmd_today_mlb"),
+        ("🎾 Tenis Hoy",   "cmd_today_tenis"),
+        ("📅 Todo Hoy",    "cmd_today"),
+        ("📅 Mañana",      "cmd_manana"),
+        ("🤖 Pronósticos", "cmd_pronosticos"),
+    ]),
+    "sec_estadisticas": ("📊 Estadísticas", [
+        ("📊 Stats Bot",     "cmd_stats"),
+        ("📋 Stats Equipo",  "cmd_stats_team"),
+        ("📈 Forma Equipo",  "cmd_form"),
+        ("📈 Historial",     "cmd_historial"),
+        ("🏆 Record Result", "cmd_resultado"),
+        ("🔢 Estadísticas",  "cmd_estadisticas"),
+    ]),
+    "sec_analisis": ("💡 Análisis Avanzado", [
+        ("💰 Value Bet",    "cmd_value"),
+        ("🗺 Mercados",     "cmd_markets"),
+        ("🧠 Intel",        "cmd_intel"),
+        ("👤 Props Player", "cmd_player"),
+        ("🌦 Clima",        "cmd_weather"),
+        ("⚖️ Árbitro",      "cmd_referee"),
+    ]),
+    "sec_ia": ("🤖 Análisis IA", [
+        ("🤖 Análisis IA", "cmd_analisis"),
+        ("❓ Pregunta IA", "cmd_pregunta"),
+        ("🏅 AI Picks",    "cmd_ai_picks"),
+        ("🎾 Elo Update",  "cmd_elo_update"),
+    ]),
+    "sec_apuestas": ("💰 Apuestas Avanzadas", [
+        ("📊 CLV",       "cmd_clv"),
+        ("⚠️ Riesgo",    "cmd_risk"),
+        ("💼 Portfolio", "cmd_portfolio"),
+        ("🧮 Bayes",     "cmd_bayes"),
+        ("💧 Liquidez",  "cmd_liquidity"),
+        ("🔥 Steam",     "cmd_steam"),
+        ("🤝 Consenso",  "cmd_consensus"),
+    ]),
+    "sec_scanner": ("🛰 Scanner", [
+        ("🛰 Autoscan",      "cmd_autoscan"),
+        ("🔍 Scanner",       "cmd_scanner"),
+        ("🔎 Scan Odds",     "cmd_scanodds"),
+        ("➕ Add Market",    "cmd_addmarket"),
+        ("🗑 Clear Markets", "cmd_clearmarkets"),
+    ]),
+    "sec_live": ("📡 Datos en Vivo", [
+        ("📡 Live",     "cmd_live"),
+        ("📺 Scores",   "cmd_scores"),
+        ("🏆 Tabla",    "cmd_tabla"),
+        ("📡 LiveTeam", "cmd_liveteam"),
+    ]),
+    "sec_alertas": ("🔔 Alertas", [
+        ("🔔 Activar alertas",    "cmd_alertas_on"),
+        ("🔕 Desactivar alertas", "cmd_alertas_off"),
+    ]),
+}
 
 # Map callback_data → the async handler function name
 _MENU_DISPATCH: dict[str, str] = {
@@ -4515,8 +4649,14 @@ _MENU_DISPATCH: dict[str, str] = {
     "cmd_parlay_safe":  "parlay_safe_command",
     "cmd_parlay_dream": "parlay_dream_command",
     "cmd_checkparlay":  "checkparlay_command",
+    # Stats & History
+    "cmd_stats":        "stats",
+    "cmd_stats_team":   "stats",
+    "cmd_form":         "form_command",
     "cmd_estadisticas": "estadisticas_command",
     "cmd_historial":    "historial_command",
+    "cmd_resultado":    "resultado_command",
+    # Today / Schedule
     "cmd_today":        "today",
     "cmd_today_futbol": "today_futbol",
     "cmd_today_nba":    "today_nba",
@@ -4525,61 +4665,95 @@ _MENU_DISPATCH: dict[str, str] = {
     "cmd_today_tenis":  "today_tenis",
     "cmd_manana":       "manana",
     "cmd_pronosticos":  "pronosticos_command",
+    # Advanced analysis
+    "cmd_value":        "value",
+    "cmd_markets":      "markets_command",
+    "cmd_intel":        "intel_command",
+    "cmd_player":       "player_command",
+    "cmd_weather":      "weather_command",
+    "cmd_referee":      "referee_command",
+    # AI
+    "cmd_analisis":     "analisis_command",
+    "cmd_pregunta":     "pregunta_command",
+    "cmd_ai_picks":     "ai_picks_command",
+    "cmd_elo_update":   "elo_update",
+    # Advanced betting
+    "cmd_clv":          "clv_command",
+    "cmd_risk":         "risk_command",
+    "cmd_portfolio":    "portfolio_command",
+    "cmd_bayes":        "bayes_command",
+    "cmd_liquidity":    "liquidity_command",
+    "cmd_steam":        "steam_command",
+    "cmd_consensus":    "consensus_command",
+    # Scanner
     "cmd_autoscan":     "autoscan_command",
     "cmd_scanner":      "scanner_command",
+    "cmd_scanodds":     "scanodds_command",
+    "cmd_addmarket":    "addmarket_command",
+    "cmd_clearmarkets": "clearmarkets_command",
+    # Live
     "cmd_live":         "live",
     "cmd_scores":       "scores",
     "cmd_tabla":        "tabla",
+    "cmd_liveteam":     "liveteam",
+    # Alerts
     "cmd_alertas_on":   "alertas_command",
     "cmd_alertas_off":  "alertas_command",
 }
 
 
-def _build_inline_keyboard() -> InlineKeyboardMarkup:
+def _build_main_keyboard() -> InlineKeyboardMarkup:
     """
-    Build the full inline keyboard.
-
-    Section headers (entries with ``callback_data=None``) appear as a single
-    full-width disabled-looking button labelled with the section title.
-    All other entries are laid out two per row.
+    Build the top-level keyboard: one button per category, two per row.
+    Tapping a category button triggers ``sec_<key>`` in menu_callback,
+    which edits this message to show only that section's commands.
     """
     rows: list[list[InlineKeyboardButton]] = []
     pair: list[InlineKeyboardButton] = []
-
-    for label, cb in _MENU_SECTIONS:
-        if cb is None:
-            # Flush any pending pair first
-            if pair:
-                rows.append(pair)
-                pair = []
-            # Section header — full-width, uses a no-op callback so Telegram
-            # doesn't complain about a button with no action.
-            rows.append([InlineKeyboardButton(label, callback_data="noop")])
-        else:
-            pair.append(InlineKeyboardButton(label, callback_data=cb))
-            if len(pair) == 2:
-                rows.append(pair)
-                pair = []
-
-    if pair:          # flush last odd button
+    for key, (label, _) in _MENU_GROUPS.items():
+        pair.append(InlineKeyboardButton(label, callback_data=key))
+        if len(pair) == 2:
+            rows.append(pair)
+            pair = []
+    if pair:
         rows.append(pair)
+    return InlineKeyboardMarkup(rows)
 
+
+def _build_section_keyboard(section_key: str) -> InlineKeyboardMarkup:
+    """
+    Build the sub-menu keyboard for *section_key*.
+    Command buttons are laid out two per row, followed by a full-width
+    '◀️ Volver' button that navigates back to the main category menu.
+    """
+    _, buttons = _MENU_GROUPS[section_key]
+    rows: list[list[InlineKeyboardButton]] = []
+    pair: list[InlineKeyboardButton] = []
+    for label, cb in buttons:
+        pair.append(InlineKeyboardButton(label, callback_data=cb))
+        if len(pair) == 2:
+            rows.append(pair)
+            pair = []
+    if pair:
+        rows.append(pair)
+    rows.append([InlineKeyboardButton("◀️ Volver al Menú", callback_data="menu_back")])
     return InlineKeyboardMarkup(rows)
 
 
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /menu — Show the interactive inline keyboard.
+    /menu — Show the interactive two-level inline keyboard.
 
-    Pressing any button triggers the corresponding bot command in-chat so
-    the user never has to type a slash command manually.
+    The main menu lists category buttons.  Tapping a category replaces the
+    message with the commands in that category.  A '◀️ Volver' button returns
+    to the category view.
     """
     await update.message.reply_text(
         "🤖 *Sports Engine — Menú Principal*\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "Elige una opción:",
+        "Elige una categoría:",
         parse_mode="Markdown",
-        reply_markup=_build_inline_keyboard(),
+        reply_markup=_build_main_keyboard(),
     )
 
 
@@ -4840,20 +5014,47 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handle all inline-keyboard button presses.
 
-    Each button's ``callback_data`` is looked up in ``_MENU_DISPATCH`` to
-    find the handler function, which is then called directly — exactly as if
-    the user had sent the corresponding slash command.
+    Two-level navigation:
+    • ``sec_<key>``  — edit the message to show that section's sub-menu.
+    • ``menu_back``  — edit the message back to the main category menu.
+    • ``noop``       — section-header label, do nothing.
+    • ``cmd_*``      — looked up in ``_MENU_DISPATCH`` and executed directly.
     """
     query = update.callback_query
     await query.answer()   # dismiss the Telegram "loading" spinner
 
     cb = query.data
+
+    # ── Navigation: back to main menu ────────────────────────────────────────
+    if cb == "menu_back":
+        await query.edit_message_text(
+            "🤖 *Sports Engine — Menú Principal*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Elige una categoría:",
+            parse_mode="Markdown",
+            reply_markup=_build_main_keyboard(),
+        )
+        return
+
+    # ── Navigation: open a category sub-menu ─────────────────────────────────
+    if cb in _MENU_GROUPS:
+        label, _ = _MENU_GROUPS[cb]
+        await query.edit_message_text(
+            f"🤖 *Sports Engine — {label}*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Elige un comando:",
+            parse_mode="Markdown",
+            reply_markup=_build_section_keyboard(cb),
+        )
+        return
+
+    # ── Legacy no-op (section headers in old flat menus) ─────────────────────
     if cb == "noop":
-        # Section-header button — nothing to do
         return
 
     # Commands that need arguments show a usage hint instead of running blind
     _NEEDS_ARGS = {
+        # Predictions
         "cmd_predict":     "⚽ Uso: `/predict LOCAL vs VISITANTE`",
         "cmd_nba":         "🏀 Uso: `/nba LOCAL vs VISITANTE`",
         "cmd_mlb":         "⚾ Uso: `/mlb LOCAL vs VISITANTE`",
@@ -4864,6 +5065,42 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "cmd_checkparlay": "📸 Uso: `/checkparlay <patas del parlay>`\n"
                            "O envía una *foto* con caption describiendo las patas.",
         "cmd_tabla":       "🏆 Uso: `/tabla <liga>`\nEj: `/tabla Premier League`",
+        # Stats
+        "cmd_stats_team":  "📋 Uso: `/stats EQUIPO`\nEj: `/stats Real Madrid`",
+        "cmd_form":        "📈 Uso: `/form EQUIPO`\nEj: `/form Barcelona`",
+        "cmd_resultado":   "✅ Uso: `/resultado <id_parlay> W/L`\nEj: `/resultado 42 W`",
+        # Advanced analysis
+        "cmd_value":       (
+            "💰 Uso: `/value LOCAL vs VISITANTE C\\_L C\\_E C\\_V`\n"
+            "Ej: `/value América vs Chivas 1.80 3.40 4.50`"
+        ),
+        "cmd_markets":     "🗺 Uso: `/markets LOCAL vs VISITANTE`\nEj: `/markets Barça vs Madrid`",
+        "cmd_intel":       "🧠 Uso: `/intel LOCAL vs VISITANTE`\nEj: `/intel Liverpool vs Arsenal`",
+        "cmd_player":      "👤 Uso: `/player JUGADOR`\nEj: `/player Haaland`",
+        "cmd_referee":     "⚖️ Uso: `/referee NOMBRE_ARBITRO`\nEj: `/referee Felix Brych`",
+        "cmd_weather":     "🌦 Uso: `/weather CIUDAD o ESTADIO`\nEj: `/weather Bernabeu`",
+        # AI
+        "cmd_analisis":    (
+            "🤖 Uso: `/analisis EQUIPO1 vs EQUIPO2 [deporte]`\n"
+            "Ej: `/analisis Real Madrid vs Barça`\n"
+            "Ej: `/analisis Lakers vs Warriors nba`"
+        ),
+        "cmd_pregunta":    "❓ Uso: `/pregunta <tu pregunta>`\nEj: `/pregunta ¿Vale el Over 2.5 en el Clásico?`",
+        "cmd_elo_update":  (
+            "🎾 Uso: `/elo_update GANADOR vs PERDEDOR [clay/grass/hard] [slam]`\n"
+            "Ej: `/elo_update Djokovic vs Medvedev hard`"
+        ),
+        # Advanced betting
+        "cmd_clv":         (
+            "📊 Uso: `/clv` para ver estadísticas\n"
+            "o `/clv log EVENTO | MERCADO | CUOTA`\n"
+            "Ej: `/clv log Madrid vs Barça | Victoria Madrid | 1.92`"
+        ),
+        "cmd_liveteam":    "📡 Uso: `/liveteam EQUIPO`\nEj: `/liveteam Barcelona`",
+        "cmd_addmarket":   (
+            "➕ Uso: `/addmarket DEPORTE | EVENTO | MERCADO | cuota@casa`\n"
+            "Ej: `/addmarket soccer | Barça vs Madrid | 1X2 | 1.80@bet365`"
+        ),
     }
 
     if cb in _NEEDS_ARGS:
@@ -5022,6 +5259,7 @@ def main():
     app.add_handler(CommandHandler("mlb", mlb))
     app.add_handler(CommandHandler("nfl", nfl))
     app.add_handler(CommandHandler("tennis", tennis))
+    app.add_handler(CommandHandler("elo_update",  elo_update))
 
     # ── AI-powered commands (OpenAI GPT) ──
     app.add_handler(CommandHandler("analisis",  analisis_command))

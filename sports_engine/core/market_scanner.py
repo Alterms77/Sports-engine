@@ -28,6 +28,17 @@ from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
+
+def _md(text: str) -> str:
+    """Escape Telegram Markdown v1 special characters in dynamic content."""
+    return (
+        str(text)
+        .replace("_", r"\_")
+        .replace("*", r"\*")
+        .replace("`", r"\`")
+        .replace("[", r"\[")
+    )
+
 # ──────────────────────────────────────────────────────────────────────────────
 # DETECTION THRESHOLDS (as fractional multipliers)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -272,7 +283,7 @@ def format_alert(alert: MarketAlert) -> str:
     label = _LABEL.get(alert.classification, "Alerta")
     sport_e = _sport_emoji(alert.sport)
 
-    player_line = f"\n👤 *Jugador:* {alert.player}" if alert.player else ""
+    player_line = f"\n👤 *Jugador:* {_md(alert.player)}" if alert.player else ""
 
     # Build odds comparison table (highest odds first)
     rows = []
@@ -286,9 +297,9 @@ def format_alert(alert: MarketAlert) -> str:
     return (
         f"{emoji} *MARKET ERROR ALERT — {label.upper()}*\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"{sport_e} *Deporte:* {alert.sport}\n"
-        f"📋 *Evento:* {alert.event}{player_line}\n"
-        f"📊 *Mercado:* {alert.market}\n\n"
+        f"{sport_e} *Deporte:* {_md(alert.sport)}\n"
+        f"📋 *Evento:* {_md(alert.event)}{player_line}\n"
+        f"📊 *Mercado:* {_md(alert.market)}\n\n"
         f"🏦 *Casa detectada:* `{alert.bookmaker}`\n"
         f"💰 *Cuota detectada:* `{alert.outlier_odds:.2f}` "
         f"(impl. {round(100/alert.outlier_odds, 1)}%)\n"
@@ -340,8 +351,8 @@ def format_scan_summary(
         emoji = _EMOJI.get(alert.classification, "⚠️")
         sport_e = _sport_emoji(alert.sport)
         lines.append(
-            f"{emoji} {sport_e} *{alert.bookmaker}* — {alert.event}\n"
-            f"   {alert.market}: `{alert.outlier_odds:.2f}` "
+            f"{emoji} {sport_e} *{_md(alert.bookmaker)}* — {_md(alert.event)}\n"
+            f"   {_md(alert.market)}: `{alert.outlier_odds:.2f}` "
             f"vs avg `{alert.average_odds:.2f}` (+{alert.diff_pct:.1f}%)"
         )
 
