@@ -4583,17 +4583,48 @@ _MENU_SECTIONS = [
     ("🤖 Pronósticos", "cmd_pronosticos"),
 
     ("── 📊 ESTADÍSTICAS ──", None),
-    ("📊 Estadísticas",  "cmd_estadisticas"),
-    ("📈 Historial",     "cmd_historial"),
+    ("📊 Stats Bot",     "cmd_stats"),
+    ("📋 Stats Equipo",  "cmd_stats_team"),
+    ("📈 Forma Equipo",  "cmd_form"),
+    ("📊 Historial",     "cmd_historial"),
+    ("🏆 Record Result", "cmd_resultado"),
+    ("🔢 Estadísticas",  "cmd_estadisticas"),
+
+    ("── 💡 ANÁLISIS AVANZADO ──", None),
+    ("💰 Value Bet",   "cmd_value"),
+    ("🗺 Mercados",    "cmd_markets"),
+    ("🧠 Intel",       "cmd_intel"),
+    ("👤 Props Player","cmd_player"),
+    ("🌦 Clima",       "cmd_weather"),
+    ("⚖️ Árbitro",     "cmd_referee"),
+
+    ("── 🤖 ANÁLISIS IA ──", None),
+    ("🤖 Análisis IA",  "cmd_analisis"),
+    ("❓ Pregunta IA",  "cmd_pregunta"),
+    ("🏅 AI Picks",     "cmd_ai_picks"),
+    ("🎾 Elo Update",   "cmd_elo_update"),
+
+    ("── 💰 APUESTAS AVANZADAS ──", None),
+    ("📊 CLV",         "cmd_clv"),
+    ("⚠️ Riesgo",      "cmd_risk"),
+    ("💼 Portfolio",   "cmd_portfolio"),
+    ("🧮 Bayes",       "cmd_bayes"),
+    ("💧 Liquidez",    "cmd_liquidity"),
+    ("🔥 Steam",       "cmd_steam"),
+    ("🤝 Consenso",    "cmd_consensus"),
 
     ("── 🛰 SCANNER ──", None),
-    ("🛰 Autoscan",  "cmd_autoscan"),
-    ("🔍 Scanner",   "cmd_scanner"),
+    ("🛰 Autoscan",    "cmd_autoscan"),
+    ("🔍 Scanner",     "cmd_scanner"),
+    ("🔎 Scan Odds",   "cmd_scanodds"),
+    ("➕ Add Market",  "cmd_addmarket"),
+    ("🗑 Clear Markets","cmd_clearmarkets"),
 
     ("── 📡 DATOS EN VIVO ──", None),
-    ("📡 Live",     "cmd_live"),
-    ("📺 Scores",   "cmd_scores"),
-    ("🏆 Tabla",    "cmd_tabla"),
+    ("📡 Live",       "cmd_live"),
+    ("📺 Scores",     "cmd_scores"),
+    ("🏆 Tabla",      "cmd_tabla"),
+    ("📡 LiveTeam",   "cmd_liveteam"),
 
     ("── 🔔 ALERTAS ──", None),
     ("🔔 Activar alertas",    "cmd_alertas_on"),
@@ -4614,8 +4645,14 @@ _MENU_DISPATCH: dict[str, str] = {
     "cmd_parlay_safe":  "parlay_safe_command",
     "cmd_parlay_dream": "parlay_dream_command",
     "cmd_checkparlay":  "checkparlay_command",
+    # Stats & History
+    "cmd_stats":        "stats",
+    "cmd_stats_team":   "stats",
+    "cmd_form":         "form_command",
     "cmd_estadisticas": "estadisticas_command",
     "cmd_historial":    "historial_command",
+    "cmd_resultado":    "resultado_command",
+    # Today / Schedule
     "cmd_today":        "today",
     "cmd_today_futbol": "today_futbol",
     "cmd_today_nba":    "today_nba",
@@ -4624,11 +4661,38 @@ _MENU_DISPATCH: dict[str, str] = {
     "cmd_today_tenis":  "today_tenis",
     "cmd_manana":       "manana",
     "cmd_pronosticos":  "pronosticos_command",
+    # Advanced analysis
+    "cmd_value":        "value",
+    "cmd_markets":      "markets_command",
+    "cmd_intel":        "intel_command",
+    "cmd_player":       "player_command",
+    "cmd_weather":      "weather_command",
+    "cmd_referee":      "referee_command",
+    # AI
+    "cmd_analisis":     "analisis_command",
+    "cmd_pregunta":     "pregunta_command",
+    "cmd_ai_picks":     "ai_picks_command",
+    "cmd_elo_update":   "elo_update",
+    # Advanced betting
+    "cmd_clv":          "clv_command",
+    "cmd_risk":         "risk_command",
+    "cmd_portfolio":    "portfolio_command",
+    "cmd_bayes":        "bayes_command",
+    "cmd_liquidity":    "liquidity_command",
+    "cmd_steam":        "steam_command",
+    "cmd_consensus":    "consensus_command",
+    # Scanner
     "cmd_autoscan":     "autoscan_command",
     "cmd_scanner":      "scanner_command",
+    "cmd_scanodds":     "scanodds_command",
+    "cmd_addmarket":    "addmarket_command",
+    "cmd_clearmarkets": "clearmarkets_command",
+    # Live
     "cmd_live":         "live",
     "cmd_scores":       "scores",
     "cmd_tabla":        "tabla",
+    "cmd_liveteam":     "liveteam",
+    # Alerts
     "cmd_alertas_on":   "alertas_command",
     "cmd_alertas_off":  "alertas_command",
 }
@@ -4953,6 +5017,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Commands that need arguments show a usage hint instead of running blind
     _NEEDS_ARGS = {
+        # Predictions
         "cmd_predict":     "⚽ Uso: `/predict LOCAL vs VISITANTE`",
         "cmd_nba":         "🏀 Uso: `/nba LOCAL vs VISITANTE`",
         "cmd_mlb":         "⚾ Uso: `/mlb LOCAL vs VISITANTE`",
@@ -4963,6 +5028,42 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "cmd_checkparlay": "📸 Uso: `/checkparlay <patas del parlay>`\n"
                            "O envía una *foto* con caption describiendo las patas.",
         "cmd_tabla":       "🏆 Uso: `/tabla <liga>`\nEj: `/tabla Premier League`",
+        # Stats
+        "cmd_stats_team":  "📋 Uso: `/stats EQUIPO`\nEj: `/stats Real Madrid`",
+        "cmd_form":        "📈 Uso: `/form EQUIPO`\nEj: `/form Barcelona`",
+        "cmd_resultado":   "✅ Uso: `/resultado <id_parlay> W/L`\nEj: `/resultado 42 W`",
+        # Advanced analysis
+        "cmd_value":       (
+            "💰 Uso: `/value LOCAL vs VISITANTE C\\_L C\\_E C\\_V`\n"
+            "Ej: `/value América vs Chivas 1.80 3.40 4.50`"
+        ),
+        "cmd_markets":     "🗺 Uso: `/markets LOCAL vs VISITANTE`\nEj: `/markets Barça vs Madrid`",
+        "cmd_intel":       "🧠 Uso: `/intel LOCAL vs VISITANTE`\nEj: `/intel Liverpool vs Arsenal`",
+        "cmd_player":      "👤 Uso: `/player JUGADOR`\nEj: `/player Haaland`",
+        "cmd_referee":     "⚖️ Uso: `/referee NOMBRE_ARBITRO`\nEj: `/referee Felix Brych`",
+        "cmd_weather":     "🌦 Uso: `/weather CIUDAD o ESTADIO`\nEj: `/weather Bernabeu`",
+        # AI
+        "cmd_analisis":    (
+            "🤖 Uso: `/analisis EQUIPO1 vs EQUIPO2 [deporte]`\n"
+            "Ej: `/analisis Real Madrid vs Barça`\n"
+            "Ej: `/analisis Lakers vs Warriors nba`"
+        ),
+        "cmd_pregunta":    "❓ Uso: `/pregunta <tu pregunta>`\nEj: `/pregunta ¿Vale el Over 2.5 en el Clásico?`",
+        "cmd_elo_update":  (
+            "🎾 Uso: `/elo_update GANADOR vs PERDEDOR [clay/grass/hard] [slam]`\n"
+            "Ej: `/elo_update Djokovic vs Medvedev hard`"
+        ),
+        # Advanced betting
+        "cmd_clv":         (
+            "📊 Uso: `/clv` para ver estadísticas\n"
+            "o `/clv log EVENTO | MERCADO | CUOTA`\n"
+            "Ej: `/clv log Madrid vs Barça | Victoria Madrid | 1.92`"
+        ),
+        "cmd_liveteam":    "📡 Uso: `/liveteam EQUIPO`\nEj: `/liveteam Barcelona`",
+        "cmd_addmarket":   (
+            "➕ Uso: `/addmarket DEPORTE | EVENTO | MERCADO | cuota@casa`\n"
+            "Ej: `/addmarket soccer | Barça vs Madrid | 1X2 | 1.80@bet365`"
+        ),
     }
 
     if cb in _NEEDS_ARGS:
