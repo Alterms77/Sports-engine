@@ -3,7 +3,7 @@
 from core.distributions import poisson_pmf
 
 
-def match_probabilities(xg_home: float, xg_away: float, max_goals: int = 6) -> dict:
+def match_probabilities(xg_home: float, xg_away: float, max_goals: int = 10) -> dict:
     home_win = 0.0
     draw = 0.0
     away_win = 0.0

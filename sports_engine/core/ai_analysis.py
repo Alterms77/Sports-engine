@@ -1,22 +1,21 @@
 """
-core/ai_analysis.py — AI-powered sports betting analysis via OpenAI.
+core/ai_analysis.py — AI-powered sports betting analysis via Google Gemini.
 
 Bridges the gap between the purely statistical models (Poisson, Elo, xG, etc.)
 and human-readable, narrative-driven betting intelligence.
 
-All functions are completely optional: when ``OPENAI_API_KEY`` is not set,
+All functions are completely optional: when ``GEMINI_API_KEY`` is not set,
 every function returns a polite fallback string so the bot degrades gracefully.
 
 Model strategy (cost & quality)
 --------------------------------
-* ``gpt-4o-mini`` for analysis/Q&A  — fast, cheap, excellent for structured prompts.
-* ``gpt-4o``      for Vision OCR    — required for image quality (set elsewhere).
-The model can be overridden via the ``OPENAI_MODEL`` environment variable.
+* ``gemini-2.0-flash`` for analysis/Q&A — fast, cost-efficient.
+The model can be overridden via the ``GEMINI_MODEL`` environment variable.
 
 Public API
 ----------
 ``analyze_prediction(pred, sport)``
-    Takes any sport predictor's result dict and returns a GPT-powered
+    Takes any sport predictor's result dict and returns a Gemini-powered
     narrative analysis with risk assessment and betting recommendation.
 
 ``generate_parlay_narrative(legs, combined_prob, tiers)``
@@ -24,7 +23,7 @@ Public API
 
 ``answer_betting_question(question, context_text)``
     Free-form sports betting Q&A. The bot passes the question + optional
-    statistical context; GPT answers as an expert sports analyst.
+    statistical context; Gemini answers as an expert sports analyst.
 
 ``is_available()``
     Returns True when the API key is configured and the module is usable.
@@ -46,28 +45,28 @@ logger = logging.getLogger(__name__)
 
 def _api_key() -> str:
     try:
-        from core.config import OPENAI_API_KEY  # type: ignore
-        return OPENAI_API_KEY
+        from core.config import GEMINI_API_KEY  # type: ignore
+        return GEMINI_API_KEY
     except Exception:
-        return os.getenv("OPENAI_API_KEY", "")
+        return os.getenv("GEMINI_API_KEY", "")
 
 
 def _model() -> str:
     try:
-        from core.config import OPENAI_MODEL, OPENAI_MODEL_DEFAULT  # type: ignore
-        return OPENAI_MODEL or OPENAI_MODEL_DEFAULT
+        from core.config import GEMINI_MODEL  # type: ignore
+        return GEMINI_MODEL or "gemini-2.0-flash"
     except Exception:
-        return os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        return os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 
 def is_available() -> bool:
-    """Return True when an OpenAI API key is configured."""
+    """Return True when a Gemini API key is configured."""
     return bool(_api_key())
 
 
 # ── HTTP helper ───────────────────────────────────────────────────────────────
 
-_OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
+_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 _SYSTEM_PROMPT = (
     "Eres un analista deportivo experto en apuestas estadísticas. "
@@ -91,13 +90,13 @@ _RESPONSE_CACHE: dict = {}
 _CACHE_TTL = 300  # 5 minutes — avoids duplicate API calls for identical prompts
 
 
-def _call_openai(
-    messages: list[dict],
+def _call_gemini(
+    prompt: str,
     max_tokens: int = 500,
     temperature: float = 0.4,
 ) -> str:
     """
-    Call the OpenAI Chat Completions endpoint with retry on 429/5xx.
+    Call the Google Gemini generateContent endpoint with retry on 429/5xx.
 
     Retry strategy
     --------------
@@ -112,33 +111,35 @@ def _call_openai(
     """
     api_key = _api_key()
     if not api_key:
-        raise RuntimeError("OPENAI_API_KEY no configurado")
+        raise RuntimeError("GEMINI_API_KEY no configurado")
 
     # ── In-process cache lookup ───────────────────────────────────────────
-    cache_key = (str(messages), max_tokens)
+    cache_key = (prompt, max_tokens)
     now = time.time()
     if cache_key in _RESPONSE_CACHE:
         cached_text, cached_ts = _RESPONSE_CACHE[cache_key]
         if now - cached_ts < _CACHE_TTL:
-            logger.debug("_call_openai: serving from cache")
+            logger.debug("_call_gemini: serving from cache")
             return cached_text
 
+    model = _model()
+    url = f"{_GEMINI_BASE_URL}/{model}:generateContent?key={api_key}"
     payload = {
-        "model": _model(),
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "messages": messages,
+        "contents": [
+            {"role": "user", "parts": [{"text": prompt}]}
+        ],
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": max_tokens,
+        },
     }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
 
     last_exc: Exception = RuntimeError("No se pudo contactar la IA")
     for attempt in range(_MAX_RETRIES):
         try:
             resp = requests.post(
-                _OPENAI_CHAT_URL,
+                url,
                 headers=headers,
                 json=payload,
                 timeout=30,
@@ -147,7 +148,7 @@ def _call_openai(
                 # Transient error — back off and retry
                 wait = _RETRY_BASE ** attempt
                 logger.warning(
-                    "_call_openai: HTTP %s on attempt %d/%d, retrying in %.1fs",
+                    "_call_gemini: HTTP %s on attempt %d/%d, retrying in %.1fs",
                     resp.status_code, attempt + 1, _MAX_RETRIES, wait,
                 )
                 time.sleep(wait)
@@ -157,12 +158,12 @@ def _call_openai(
                 continue
             resp.raise_for_status()
             data = resp.json()
-            text = data["choices"][0]["message"]["content"].strip()
+            text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
             _RESPONSE_CACHE[cache_key] = (text, time.time())
             return text
         except requests.exceptions.Timeout as exc:
             wait = _RETRY_BASE ** attempt
-            logger.warning("_call_openai: timeout attempt %d, retrying in %.1fs", attempt + 1, wait)
+            logger.warning("_call_gemini: timeout attempt %d, retrying in %.1fs", attempt + 1, wait)
             time.sleep(wait)
             last_exc = exc
         except requests.exceptions.HTTPError as exc:
@@ -313,15 +314,15 @@ def _format_prediction(pred: dict, sport: str) -> str:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 _NO_KEY_MSG = (
-    "🤖 _Análisis IA no disponible_ — configura `OPENAI_API_KEY` "
-    "en las variables de entorno para activar el análisis GPT."
+    "🤖 _Análisis IA no disponible_ — configura `GEMINI_API_KEY` "
+    "en las variables de entorno para activar el análisis con Gemini."
 )
 
 # Human-friendly messages for common API error scenarios.
 # These replace the raw exception string (which can contain underscores, URLs,
 # and other characters that break Telegram MarkdownV1 inside _…_ italic blocks).
 def _friendly_ai_error(exc: Exception) -> str:
-    """Return a short, Markdown-safe description of an OpenAI API failure.
+    """Return a short, Markdown-safe description of a Gemini API failure.
 
     Never exposes raw HTTP error details (URLs, status lines) that could
     contain underscores or other Telegram MarkdownV1 special characters.
@@ -332,13 +333,13 @@ def _friendly_ai_error(exc: Exception) -> str:
     if "401" in msg or "Unauthorized" in msg or "authentication" in msg.lower():
         return "API key inválida o expirada"
     if "403" in msg or "Forbidden" in msg:
-        return "acceso denegado por OpenAI"
+        return "acceso denegado por Gemini"
     if "500" in msg or "502" in msg or "503" in msg or "server" in msg.lower():
         return "error temporal del servidor de IA"
     if "timeout" in msg.lower() or "Timeout" in msg:
         return "tiempo de espera agotado — intenta de nuevo"
-    if "OPENAI_API_KEY" in msg:
-        return "API key de OpenAI no configurada"
+    if "GEMINI_API_KEY" in msg:
+        return "API key de Gemini no configurada"
     # Generic fallback — still Markdown-safe (no underscores / asterisks)
     return "no se pudo contactar el servicio de IA"
 
@@ -378,13 +379,8 @@ def analyze_prediction(pred: dict, sport: str = "soccer") -> str:
 
     try:
         time.sleep(_RATE_LIMIT_DELAY)
-        return _call_openai(
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg},
-            ],
-            max_tokens=600,
-        )
+        full_prompt = f"{_SYSTEM_PROMPT}\n\n{user_msg}"
+        return _call_gemini(full_prompt, max_tokens=600)
     except Exception as exc:
         logger.warning("AI analyze_prediction failed: %s", exc)
         return f"⚠️ _Error al consultar IA: {_friendly_ai_error(exc)}_"
@@ -433,14 +429,8 @@ def generate_parlay_narrative(
 
     try:
         time.sleep(_RATE_LIMIT_DELAY)
-        return _call_openai(
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg},
-            ],
-            max_tokens=300,
-            temperature=0.5,
-        )
+        full_prompt = f"{_SYSTEM_PROMPT}\n\n{user_msg}"
+        return _call_gemini(full_prompt, max_tokens=300, temperature=0.5)
     except Exception as exc:
         logger.warning("AI generate_parlay_narrative failed: %s", exc)
         return f"⚠️ _Error al generar narrativa IA: {_friendly_ai_error(exc)}_"
@@ -475,14 +465,8 @@ def answer_betting_question(question: str, context_text: str = "") -> str:
 
     try:
         time.sleep(_RATE_LIMIT_DELAY)
-        return _call_openai(
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg},
-            ],
-            max_tokens=500,
-            temperature=0.5,
-        )
+        full_prompt = f"{_SYSTEM_PROMPT}\n\n{user_msg}"
+        return _call_gemini(full_prompt, max_tokens=500, temperature=0.5)
     except Exception as exc:
         logger.warning("AI answer_betting_question failed: %s", exc)
         return f"⚠️ _Error al consultar IA: {_friendly_ai_error(exc)}_"
@@ -532,13 +516,8 @@ def ai_picks_summary(predictions: list[dict]) -> str:
 
     try:
         time.sleep(_RATE_LIMIT_DELAY)
-        return _call_openai(
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": user_msg},
-            ],
-            max_tokens=500,
-        )
+        full_prompt = f"{_SYSTEM_PROMPT}\n\n{user_msg}"
+        return _call_gemini(full_prompt, max_tokens=500)
     except Exception as exc:
         logger.warning("AI ai_picks_summary failed: %s", exc)
         return f"⚠️ _Error al generar resumen IA: {_friendly_ai_error(exc)}_"

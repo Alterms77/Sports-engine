@@ -1,7 +1,7 @@
 """
 Tests for core/ai_analysis.py.
 
-All tests run without a real OpenAI API key — the module must degrade
+All tests run without a real Gemini API key — the module must degrade
 gracefully in that case and every path that would call the network is
 either patched or exercised via the is_available() guard.
 """
@@ -260,8 +260,8 @@ class TestFormatters:
 # API call path (mocked)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class TestWithMockedOpenAI:
-    """Verify the call path when the API key is set and OpenAI responds."""
+class TestWithMockedGemini:
+    """Verify the call path when the API key is set and Gemini responds."""
 
     def setup_method(self):
         """Clear the in-process response cache before each test."""
@@ -269,81 +269,81 @@ class TestWithMockedOpenAI:
         core.ai_analysis._RESPONSE_CACHE.clear()
 
     def _mock_response(self, text: str):
-        """Build a mock requests.Response that looks like an OpenAI response."""
+        """Build a mock requests.Response that looks like a Gemini response."""
         mock_resp = MagicMock()
-        mock_resp.status_code = 200  # needed by the retry logic in _call_openai
+        mock_resp.status_code = 200  # needed by the retry logic in _call_gemini
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json.return_value = {
-            "choices": [{"message": {"content": text}}]
+            "candidates": [{"content": {"parts": [{"text": text}]}}]
         }
         return mock_resp
 
-    def test_analyze_prediction_returns_gpt_text(self):
+    def test_analyze_prediction_returns_gemini_text(self):
         expected = "Este es un partido equilibrado con valor en el Over 2.5."
-        with patch("core.ai_analysis._api_key", return_value="sk-fake"):
+        with patch("core.ai_analysis._api_key", return_value="fake-gemini-key"):
             with patch("requests.post", return_value=self._mock_response(expected)):
                 result = analyze_prediction(_soccer_pred(), "soccer")
         assert result == expected
 
-    def test_generate_parlay_narrative_returns_gpt_text(self):
+    def test_generate_parlay_narrative_returns_gemini_text(self):
         expected = "Parlay coherente con patas independientes."
-        with patch("core.ai_analysis._api_key", return_value="sk-fake"):
+        with patch("core.ai_analysis._api_key", return_value="fake-gemini-key"):
             with patch("requests.post", return_value=self._mock_response(expected)):
                 result = generate_parlay_narrative(_parlay_legs(), 28.5, "balanced")
         assert result == expected
 
-    def test_answer_betting_question_returns_gpt_text(self):
+    def test_answer_betting_question_returns_gemini_text(self):
         expected = "El Over 2.5 tiene valor estadístico en este partido."
-        with patch("core.ai_analysis._api_key", return_value="sk-fake"):
+        with patch("core.ai_analysis._api_key", return_value="fake-gemini-key"):
             with patch("requests.post", return_value=self._mock_response(expected)):
                 result = answer_betting_question("¿Vale el Over 2.5?")
         assert result == expected
 
     def test_answer_with_context_appended(self):
         expected = "Con esos datos, la respuesta es APOSTAR."
-        with patch("core.ai_analysis._api_key", return_value="sk-fake"):
+        with patch("core.ai_analysis._api_key", return_value="fake-gemini-key"):
             with patch("requests.post", return_value=self._mock_response(expected)) as mock_post:
                 result = answer_betting_question(
                     "¿Apostar?", context_text="xG: 2.1 vs 0.8"
                 )
-        # Verify context was included in the call
+        # Verify context was included in the Gemini prompt
         call_args = mock_post.call_args
-        user_content = call_args[1]["json"]["messages"][1]["content"]
-        assert "xG: 2.1" in user_content
+        prompt_text = call_args[1]["json"]["contents"][0]["parts"][0]["text"]
+        assert "xG: 2.1" in prompt_text
         assert result == expected
 
-    def test_ai_picks_summary_returns_gpt_text(self):
+    def test_ai_picks_summary_returns_gemini_text(self):
         expected = "1. Real Madrid (48%) — valor en local. 2. Lakers — Over atractivo."
-        with patch("core.ai_analysis._api_key", return_value="sk-fake"):
+        with patch("core.ai_analysis._api_key", return_value="fake-gemini-key"):
             with patch("requests.post", return_value=self._mock_response(expected)):
                 result = ai_picks_summary([_soccer_pred(), _nba_pred()])
         assert result == expected
 
-    def test_model_used_from_config(self):
-        """Verify that the model from config is passed to OpenAI."""
-        with patch("core.ai_analysis._api_key", return_value="sk-fake"):
-            with patch("core.ai_analysis._model", return_value="gpt-4o"):
+    def test_model_used_in_url(self):
+        """Verify that the model from config is used in the Gemini request URL."""
+        with patch("core.ai_analysis._api_key", return_value="fake-gemini-key"):
+            with patch("core.ai_analysis._model", return_value="gemini-1.5-pro"):
                 with patch("requests.post", return_value=self._mock_response("ok")) as mock_post:
                     analyze_prediction(_soccer_pred(), "soccer")
-        payload = mock_post.call_args[1]["json"]
-        assert payload["model"] == "gpt-4o"
+        url = mock_post.call_args[0][0]
+        assert "gemini-1.5-pro" in url
 
     def test_network_error_returns_warning_string(self):
         """A network error must not raise — it should return a warning string."""
-        with patch("core.ai_analysis._api_key", return_value="sk-fake"):
+        with patch("core.ai_analysis._api_key", return_value="fake-gemini-key"):
             with patch("requests.post", side_effect=Exception("timeout")):
                 result = analyze_prediction(_soccer_pred(), "soccer")
         assert "Error" in result or "error" in result
 
     def test_ai_picks_summary_caps_at_12_predictions(self):
-        """ai_picks_summary should only pass the first 12 predictions to GPT."""
+        """ai_picks_summary should only pass the first 12 predictions to Gemini."""
         preds = [_soccer_pred() for _ in range(20)]
-        with patch("core.ai_analysis._api_key", return_value="sk-fake"):
+        with patch("core.ai_analysis._api_key", return_value="fake-gemini-key"):
             with patch("requests.post", return_value=self._mock_response("ok")) as mock_post:
                 ai_picks_summary(preds)
-        user_msg = mock_post.call_args[1]["json"]["messages"][1]["content"]
+        prompt_text = mock_post.call_args[1]["json"]["contents"][0]["parts"][0]["text"]
         # Count how many "Real Madrid vs Barcelona" lines appear
-        line_count = user_msg.count("Real Madrid")
+        line_count = prompt_text.count("Real Madrid")
         assert line_count <= 12
 
     # ── New tests for 429 retry and friendly error messages ────────────────
@@ -354,7 +354,7 @@ class TestWithMockedOpenAI:
         rate_limit_resp.status_code = 429
         rate_limit_resp.raise_for_status = MagicMock()
 
-        with patch("core.ai_analysis._api_key", return_value="sk-fake"):
+        with patch("core.ai_analysis._api_key", return_value="fake-gemini-key"):
             with patch("time.sleep"):  # skip actual sleep in tests
                 with patch("requests.post", return_value=rate_limit_resp):
                     result = analyze_prediction(_soccer_pred(), "soccer")
@@ -368,7 +368,7 @@ class TestWithMockedOpenAI:
     def test_friendly_ai_error_429(self):
         """_friendly_ai_error returns human-readable text for 429."""
         from core.ai_analysis import _friendly_ai_error
-        exc = Exception("429 Client Error: Too Many Requests for url: https://api.openai.com/v1/chat/completions")
+        exc = Exception("429 Client Error: Too Many Requests for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent")
         msg = _friendly_ai_error(exc)
         assert "429" not in msg
         assert "https://" not in msg
@@ -385,7 +385,7 @@ class TestWithMockedOpenAI:
     def test_friendly_ai_error_no_key(self):
         """_friendly_ai_error returns human-readable text for missing API key."""
         from core.ai_analysis import _friendly_ai_error
-        exc = RuntimeError("OPENAI_API_KEY no configurado")
+        exc = RuntimeError("GEMINI_API_KEY no configurado")
         msg = _friendly_ai_error(exc)
         assert "_" not in msg
 
@@ -399,7 +399,7 @@ class TestWithMockedOpenAI:
         rate_limit_resp.status_code = 429
         rate_limit_resp.raise_for_status = MagicMock()
 
-        with patch("core.ai_analysis._api_key", return_value="sk-fake"):
+        with patch("core.ai_analysis._api_key", return_value="fake-gemini-key"):
             with patch("time.sleep"):
                 with patch("requests.post", return_value=rate_limit_resp):
                     result = analyze_prediction(_soccer_pred(), "soccer")
@@ -412,7 +412,7 @@ class TestWithMockedOpenAI:
 
     def test_response_cache_serves_repeat_calls(self):
         """Identical prompts must be served from cache on second call."""
-        with patch("core.ai_analysis._api_key", return_value="sk-fake"):
+        with patch("core.ai_analysis._api_key", return_value="fake-gemini-key"):
             with patch("requests.post", return_value=self._mock_response("cached")) as mock_post:
                 first  = analyze_prediction(_soccer_pred(), "soccer")
                 second = analyze_prediction(_soccer_pred(), "soccer")

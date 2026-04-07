@@ -460,6 +460,124 @@ def get_team_record(sport: str, team_name: str) -> dict:
     return {}
 
 
+def get_nba_injuries(team_name: str) -> dict:
+    """
+    Return the current injury report for an NBA team from ESPN.
+
+    Uses ESPN's public team injuries endpoint (no API key required).
+
+    Returned dict::
+
+        {
+          "players": [{"name": str, "status": str, "detail": str, "position": str}],
+          "out_count": float,   # effective number of players unavailable (OUT=1, DTD=0.5, Q=0.25)
+          "total": int,         # raw number of listed injuries
+        }
+
+    Returns {} on any failure.
+    """
+    team_id = find_team_id("nba", team_name)
+    if not team_id:
+        logger.debug("ESPN NBA injuries: team '%s' not found", team_name)
+        return {}
+
+    data = _fetch(f"{_BASE}/{SPORT_PATHS['nba']}/teams/{team_id}/injuries")
+    if not data:
+        return {}
+
+    players = []
+    for injury in data.get("injuries", []):
+        athlete = injury.get("athlete", {})
+        name = athlete.get("displayName") or athlete.get("fullName") or ""
+        if not name:
+            continue
+        status_info = injury.get("status", {})
+        status_type = (status_info.get("type", {}).get("description", "") or "").strip()
+        status_detail = (status_info.get("detail", "") or "").strip()
+        position = (athlete.get("position", {}).get("abbreviation", "") or "")
+        players.append({
+            "name": name,
+            "status": status_type,
+            "detail": status_detail,
+            "position": position,
+        })
+
+    _st = lambda s: s.lower()
+    out_count = sum(
+        1.00 if "out" in _st(p["status"]) or "suspended" in _st(p["status"])
+        else 0.75 if "doubtful" in _st(p["status"])
+        else 0.50 if "day-to-day" in _st(p["status"])
+        else 0.25 if "questionable" in _st(p["status"])
+        else 0.0
+        for p in players
+    )
+
+    logger.debug("ESPN NBA injuries for '%s': %d listed, %.2f effective out", team_name, len(players), out_count)
+    return {
+        "players": players,
+        "out_count": round(out_count, 2),
+        "total": len(players),
+    }
+
+
+def get_mlb_injuries(team_name: str) -> dict:
+    """
+    Return the current injury report for an MLB team from ESPN.
+
+    Returned dict::
+
+        {
+          "players": [{"name": str, "status": str, "detail": str, "position": str}],
+          "out_count": float,   # effective players unavailable
+          "total": int,
+        }
+
+    Returns {} on any failure.
+    """
+    team_id = find_team_id("mlb", team_name)
+    if not team_id:
+        logger.debug("ESPN MLB injuries: team '%s' not found", team_name)
+        return {}
+
+    data = _fetch(f"{_BASE}/{SPORT_PATHS['mlb']}/teams/{team_id}/injuries")
+    if not data:
+        return {}
+
+    players = []
+    for injury in data.get("injuries", []):
+        athlete = injury.get("athlete", {})
+        name = athlete.get("displayName") or athlete.get("fullName") or ""
+        if not name:
+            continue
+        status_info = injury.get("status", {})
+        status_type = (status_info.get("type", {}).get("description", "") or "").strip()
+        status_detail = (status_info.get("detail", "") or "").strip()
+        position = (athlete.get("position", {}).get("abbreviation", "") or "")
+        players.append({
+            "name": name,
+            "status": status_type,
+            "detail": status_detail,
+            "position": position,
+        })
+
+    _st = lambda s: s.lower()
+    out_count = sum(
+        1.00 if "out" in _st(p["status"]) or "il" in _st(p["status"]) or "suspended" in _st(p["status"])
+        else 0.75 if "doubtful" in _st(p["status"])
+        else 0.50 if "day-to-day" in _st(p["status"])
+        else 0.25 if "questionable" in _st(p["status"])
+        else 0.0
+        for p in players
+    )
+
+    logger.debug("ESPN MLB injuries for '%s': %d listed, %.2f effective out", team_name, len(players), out_count)
+    return {
+        "players": players,
+        "out_count": round(out_count, 2),
+        "total": len(players),
+    }
+
+
 def clear_cache() -> None:
     """Manually invalidate the in-memory ESPN cache."""
     _CACHE.clear()

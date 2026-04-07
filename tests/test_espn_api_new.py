@@ -2,6 +2,8 @@
 Tests for the new ESPN API helper functions added to resolve:
   - /mlb live probable starting pitchers (get_mlb_probable_starters)
   - /nba live team statistical leaders (get_nba_team_leaders)
+  - /nba team injuries (get_nba_injuries)
+  - /mlb team injuries (get_mlb_injuries)
 
 All ESPN HTTP calls are mocked so these tests run offline.
 """
@@ -12,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from api.espn_api import get_mlb_probable_starters, get_nba_team_leaders
+from api.espn_api import get_mlb_probable_starters, get_nba_team_leaders, get_nba_injuries, get_mlb_injuries
 
 
 # ── Fixtures / helpers ────────────────────────────────────────────────────────
@@ -227,3 +229,120 @@ class TestGetNbaTeamLeaders:
             with self._patch_fetch(page):
                 result = get_nba_team_leaders("Warriors")
         assert result.get("top_scorer", {}).get("name") == "Steph Curry"
+
+
+# ── get_nba_injuries ──────────────────────────────────────────────────────────
+
+def _nba_injuries_response(players: list) -> dict:
+    """Build a minimal ESPN NBA team injuries response."""
+    return {"injuries": [
+        {
+            "athlete": {
+                "displayName": p["name"],
+                "position": {"abbreviation": p.get("pos", "")},
+            },
+            "status": {
+                "type": {"description": p["status"]},
+                "detail": p.get("detail", ""),
+            },
+        }
+        for p in players
+    ]}
+
+
+class TestGetNbaInjuries:
+
+    def _patch_find_id(self, team_id: str = "13"):
+        return patch("api.espn_api.find_team_id", return_value=team_id)
+
+    def _patch_fetch(self, data):
+        return patch("api.espn_api._fetch", return_value=data)
+
+    def test_returns_out_players(self):
+        resp = _nba_injuries_response([
+            {"name": "LeBron James", "status": "Out", "pos": "SF"},
+        ])
+        with self._patch_find_id():
+            with self._patch_fetch(resp):
+                result = get_nba_injuries("Lakers")
+        assert result["total"] == 1
+        assert result["players"][0]["name"] == "LeBron James"
+        assert result["players"][0]["status"] == "Out"
+
+    def test_out_count_sums_correctly(self):
+        resp = _nba_injuries_response([
+            {"name": "Player A", "status": "Out"},
+            {"name": "Player B", "status": "Doubtful"},
+            {"name": "Player C", "status": "Questionable"},
+            {"name": "Player D", "status": "Active"},
+        ])
+        with self._patch_find_id():
+            with self._patch_fetch(resp):
+                result = get_nba_injuries("Lakers")
+        # Out=1.0 + Doubtful=0.75 + Questionable=0.25 = 2.0; Active not counted
+        assert abs(result["out_count"] - 2.0) < 0.01
+
+    def test_empty_when_team_not_found(self):
+        with patch("api.espn_api.find_team_id", return_value=None):
+            result = get_nba_injuries("Unknown Team")
+        assert result == {}
+
+    def test_empty_when_espn_unreachable(self):
+        with self._patch_find_id():
+            with self._patch_fetch(None):
+                result = get_nba_injuries("Lakers")
+        assert result == {}
+
+    def test_no_crash_on_empty_injuries(self):
+        with self._patch_find_id():
+            with self._patch_fetch({"injuries": []}):
+                result = get_nba_injuries("Lakers")
+        assert result["total"] == 0
+        assert result["out_count"] == 0.0
+
+
+# ── get_mlb_injuries ──────────────────────────────────────────────────────────
+
+class TestGetMlbInjuries:
+
+    def _patch_find_id(self, team_id: str = "10"):
+        return patch("api.espn_api.find_team_id", return_value=team_id)
+
+    def _patch_fetch(self, data):
+        return patch("api.espn_api._fetch", return_value=data)
+
+    def test_returns_il_players(self):
+        resp = {"injuries": [
+            {
+                "athlete": {
+                    "displayName": "Gerrit Cole",
+                    "position": {"abbreviation": "SP"},
+                },
+                "status": {
+                    "type": {"description": "15-Day IL"},
+                    "detail": "Elbow",
+                },
+            }
+        ]}
+        with self._patch_find_id():
+            with self._patch_fetch(resp):
+                result = get_mlb_injuries("Yankees")
+        assert result["total"] == 1
+        assert result["players"][0]["name"] == "Gerrit Cole"
+
+    def test_il_counts_as_out(self):
+        resp = {"injuries": [
+            {
+                "athlete": {"displayName": "Cole", "position": {"abbreviation": "SP"}},
+                "status": {"type": {"description": "10-Day IL"}, "detail": "Knee"},
+            }
+        ]}
+        with self._patch_find_id():
+            with self._patch_fetch(resp):
+                result = get_mlb_injuries("Yankees")
+        assert result["out_count"] == 1.0
+
+    def test_empty_when_team_not_found(self):
+        with patch("api.espn_api.find_team_id", return_value=None):
+            result = get_mlb_injuries("Unknown Team")
+        assert result == {}

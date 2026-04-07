@@ -732,3 +732,202 @@ def clear_cache() -> None:
     _NBA_TEAMS.clear()
     _MLB_TEAMS.clear()
     _NFL_TEAMS.clear()
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# NBA — Injuries & game lineup
+# ════════════════════════════════════════════════════════════════════════════════
+
+def get_nba_injuries(team_name: str) -> dict:
+    """
+    Return the NBA injury report for *team_name* from Sportradar.
+
+    Endpoint: ``/nba/{access}/v8/en/league/injuries.json``
+
+    Returned dict::
+
+        {
+          "players": [{"name": str, "status": str, "position": str}],
+          "out_count": float,   # effective players unavailable
+          "total": int,
+        }
+
+    Returns ``{}`` on any failure.
+    """
+    if not is_available():
+        return {}
+    try:
+        url  = _nba_url("league/injuries")
+        data = _fetch(url, ttl=_TTL_INJURIES)
+        if not data:
+            return {}
+
+        for team in data.get("teams", []):
+            if not _team_match(team_name, team):
+                continue
+
+            players = []
+            out_count = 0.0
+            for p in team.get("players", []):
+                raw_status = (p.get("status") or "").upper()
+                fn   = p.get("first_name", "")
+                ln   = p.get("last_name",  "")
+                name = (f"{fn} {ln}".strip()
+                        or p.get("full_name", "")
+                        or p.get("preferred_name", "")).strip()
+                if not name:
+                    continue
+
+                if raw_status in ("OUT", "DNP", "INACTIVE", "IR"):
+                    weight = 1.00
+                elif raw_status == "DOUBTFUL":
+                    weight = 0.75
+                elif raw_status in ("DAY_TO_DAY", "DTD"):
+                    weight = 0.50
+                elif raw_status == "QUESTIONABLE":
+                    weight = 0.25
+                else:
+                    weight = 0.0
+
+                if weight > 0:
+                    players.append({
+                        "name":     name,
+                        "status":   raw_status,
+                        "position": p.get("primary_position", ""),
+                    })
+                    out_count += weight
+
+            logger.debug(
+                "Sportradar NBA injuries for '%s': %d listed, %.2f effective out",
+                team_name, len(players), out_count,
+            )
+            return {
+                "players":   players,
+                "out_count": round(out_count, 2),
+                "total":     len(players),
+            }
+        return {}
+
+    except Exception as exc:
+        logger.debug("Sportradar NBA injuries for '%s': %s", team_name, exc)
+        return {}
+
+
+def get_nba_game_lineup(game_id: str) -> dict:
+    """
+    Return the confirmed starting lineup for both teams in an NBA game.
+
+    Uses Sportradar's boxscore endpoint (populated on game day).
+
+    Endpoint: ``/nba/{access}/v8/en/games/{game_id}/boxscore.json``
+
+    Returned dict::
+
+        {
+          "home": {"team": str, "starters": [{"name": str, "position": str, "points_pg": float}]},
+          "away": {"team": str, "starters": [...]},
+        }
+
+    Returns ``{}`` on any failure or when lineup is not yet available.
+    """
+    if not is_available():
+        return {}
+    try:
+        url  = _nba_url(f"games/{game_id}/boxscore")
+        data = _fetch(url, ttl=900)   # 15-minute cache — day-of data
+        if not data:
+            return {}
+
+        result: dict = {}
+        for side in ("home", "away"):
+            team = data.get(side, {})
+            starters = []
+            for p in team.get("players", []):
+                if not p.get("starter", False):
+                    continue
+                fn   = p.get("first_name", "")
+                ln   = p.get("last_name",  "")
+                name = f"{fn} {ln}".strip() or p.get("full_name", "")
+                stats = p.get("statistics", {})
+                ppg  = float(stats.get("points_game", 0) or stats.get("avg_points", 0) or 0.0)
+                starters.append({
+                    "name":      name,
+                    "position":  p.get("primary_position", ""),
+                    "points_pg": round(ppg, 1),
+                })
+            market = team.get("market", "")
+            name_str = team.get("name", "")
+            result[side] = {
+                "team":     f"{market} {name_str}".strip(),
+                "starters": starters,
+            }
+        return result
+
+    except Exception as exc:
+        logger.debug("Sportradar NBA boxscore for game %s: %s", game_id, exc)
+        return {}
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# MLB — Game lineup
+# ════════════════════════════════════════════════════════════════════════════════
+
+def get_mlb_game_lineup(game_id: str) -> dict:
+    """
+    Return the confirmed batting lineup for both teams in an MLB game.
+
+    Uses Sportradar's lineup endpoint (available ~2 h before first pitch).
+
+    Endpoint: ``/mlb/{access}/v7/en/games/{game_id}/lineup.json``
+
+    Returned dict::
+
+        {
+          "home": {"team": str, "lineup": [{"name": str, "position": str, "order": int, "bat_avg": float}]},
+          "away": {"team": str, "lineup": [...]},
+        }
+
+    Returns ``{}`` on any failure or when the lineup has not been posted yet.
+    """
+    if not is_available():
+        return {}
+    try:
+        url  = _mlb_url(f"games/{game_id}/lineup")
+        data = _fetch(url, ttl=900)   # 15-minute cache
+        if not data:
+            return {}
+
+        result: dict = {}
+        for side_key, result_key in (("home_team", "home"), ("away_team", "away")):
+            team = data.get(side_key, {})
+            lineup = []
+            for p in team.get("lineup", []):
+                order = p.get("batting_order") or p.get("order")
+                if not order:
+                    continue
+                fn   = p.get("first_name", "")
+                ln   = p.get("last_name",  "")
+                name = f"{fn} {ln}".strip() or p.get("full_name", "")
+                hitting = (
+                    p.get("statistics", {}).get("hitting", {}).get("overall", {})
+                    or {}
+                )
+                bat_avg = float(hitting.get("avg", 0) or 0.0)
+                lineup.append({
+                    "name":     name,
+                    "position": p.get("position", ""),
+                    "order":    int(order),
+                    "bat_avg":  round(bat_avg, 3),
+                })
+            lineup.sort(key=lambda x: x["order"])
+            market = team.get("market", "")
+            name_str = team.get("name", "")
+            result[result_key] = {
+                "team":   f"{market} {name_str}".strip(),
+                "lineup": lineup,
+            }
+        return result
+
+    except Exception as exc:
+        logger.debug("Sportradar MLB lineup for game %s: %s", game_id, exc)
+        return {}
