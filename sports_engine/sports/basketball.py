@@ -310,6 +310,47 @@ def predict_game(home_name: str, away_name: str) -> dict:
         expected_home = max(85.0, expected_home)
         expected_away = max(85.0, expected_away)
 
+    # ── Injury adjustment ─────────────────────────────────────────────────────
+    #
+    # Each effective OUT player shifts the expected margin by ±2 pts.
+    # Rationale: an "impact" starter contributes roughly 2–4 pts of margin
+    # to the team; 2 pts is a conservative mid-range estimate.
+    # Capped at 8 pts in either direction to avoid extreme swings on outlier
+    # injury reports.
+    #
+    # Data priority: Sportradar (more detailed statuses) → ESPN (fallback).
+    home_injuries: dict = {}
+    away_injuries: dict = {}
+    injury_margin_adj = 0.0
+    try:
+        from api.sportradar import get_nba_injuries as _sr_inj, is_available as _sr_avail
+        if _sr_avail():
+            home_injuries = _sr_inj(home_name) or {}
+            away_injuries = _sr_inj(away_name) or {}
+    except Exception as exc:
+        logger.debug("Sportradar NBA injury fetch: %s", exc)
+
+    if not home_injuries or not away_injuries:
+        try:
+            from api.espn_api import get_nba_injuries as _espn_inj
+            if not home_injuries:
+                home_injuries = _espn_inj(home_name) or {}
+            if not away_injuries:
+                away_injuries = _espn_inj(away_name) or {}
+        except Exception as exc:
+            logger.debug("ESPN NBA injury fetch: %s", exc)
+
+    _INJ_PTS_PER_PLAYER = 2.0   # expected-margin pts reduction per effective OUT
+    _INJ_CAP_PTS        = 8.0   # maximum total adjustment
+
+    home_out = home_injuries.get("out_count", 0.0)
+    away_out = away_injuries.get("out_count", 0.0)
+    home_penalty = min(home_out * _INJ_PTS_PER_PLAYER, _INJ_CAP_PTS)
+    away_penalty = min(away_out * _INJ_PTS_PER_PLAYER, _INJ_CAP_PTS)
+    # Positive adj = away more injured (home benefits); negative = home more injured
+    injury_margin_adj = round(away_penalty - home_penalty, 2)
+    expected_margin   = round(expected_margin + injury_margin_adj, 2)
+
     home_win_prob = round(_normal_cdf(expected_margin / NBA_SIGMA) * 100, 1)
     # Cap: NBA regular season max realistic win probability
     home_win_prob = min(home_win_prob, 75.0)
@@ -381,4 +422,10 @@ def predict_game(home_name: str, away_name: str) -> dict:
         # Season statistical leaders (ESPN live data when available)
         "home_leaders": home_leaders,
         "away_leaders": away_leaders,
+        # Injury data (when available)
+        "home_injuries": home_injuries.get("players", []),
+        "away_injuries": away_injuries.get("players", []),
+        "home_injury_out": round(home_injuries.get("out_count", 0.0), 2),
+        "away_injury_out": round(away_injuries.get("out_count", 0.0), 2),
+        "injury_margin_adj": injury_margin_adj,
     }

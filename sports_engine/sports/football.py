@@ -389,6 +389,65 @@ def predict_match(
         except Exception:
             pass  # graceful fallback — never block a prediction
 
+    # ── Fixture injury adjustment (API-Football) ──────────────────────────────
+    #
+    # Automatically fetch injury/absence data for today's fixture from
+    # API-Football.  Each confirmed absent player reduces that team's xG by 5%,
+    # capped at 30% (6 players) to prevent extreme distortions on large reports.
+    # Questionable/doubt players are counted at 50%.
+    #
+    # This feeds real squad data into the Poisson model without requiring any
+    # manual input from the user.
+    _fixture_injuries: list = []
+    _lineup_home: dict = {}
+    _lineup_away: dict = {}
+    _home_injury_pct = 0.0
+    _away_injury_pct = 0.0
+    try:
+        from api.api_football import find_fixture_id, get_fixture_injuries, get_fixture_lineups
+        from core.config import LEAGUE_IDS
+        _lid = LEAGUE_IDS.get(league, 0)
+        _fid = find_fixture_id(home_resolved, away_resolved, league_id=_lid)
+        if _fid:
+            _fixture_injuries = get_fixture_injuries(_fid) or []
+            _lineup_home_raw  = get_fixture_lineups(_fid)
+            if _lineup_home_raw:
+                _lineup_home = _lineup_home_raw.get("home", {})
+                _lineup_away = _lineup_home_raw.get("away", {})
+
+            # Count injuries per team (fuzzy name match)
+            _hn = home_resolved.lower()
+            _an = away_resolved.lower()
+
+            def _match_inj_team(inj_team_name: str, query: str) -> bool:
+                it = inj_team_name.lower()
+                q  = query.lower()
+                return it in q or q in it or any(
+                    w in q for w in it.split() if len(w) > 3
+                )
+
+            home_inj_count = sum(
+                1.0 if i.get("type") == "Missing Fixture" else 0.5
+                for i in _fixture_injuries
+                if _match_inj_team(i.get("team", ""), _hn)
+            )
+            away_inj_count = sum(
+                1.0 if i.get("type") == "Missing Fixture" else 0.5
+                for i in _fixture_injuries
+                if _match_inj_team(i.get("team", ""), _an)
+            )
+
+            _home_injury_pct = min(home_inj_count * 5.0, 30.0)
+            _away_injury_pct = min(away_inj_count * 5.0, 30.0)
+
+            if _home_injury_pct > 0:
+                xg_home = round(xg_home * (1.0 - _home_injury_pct / 100.0), 4)
+            if _away_injury_pct > 0:
+                xg_away = round(xg_away * (1.0 - _away_injury_pct / 100.0), 4)
+
+    except Exception:
+        pass  # graceful fallback — never block a prediction
+
     # Dixon-Coles analytical probabilities
     probs = dixon_coles_probabilities(xg_home, xg_away)
 
@@ -634,6 +693,12 @@ def predict_match(
         "round":       round_str,
         "stage_key":   _stage_key,
         "stage_label": _stage_label,
+        # ── Injury & lineup data (API-Football, when available) ──
+        "home_injury_pct":  _home_injury_pct,
+        "away_injury_pct":  _away_injury_pct,
+        "fixture_injuries": _fixture_injuries,
+        "lineup_home":      _lineup_home,
+        "lineup_away":      _lineup_away,
     }
 
     # ── Advanced predictions (DNB, Double Chance, AH, HT/FT, team totals) ──

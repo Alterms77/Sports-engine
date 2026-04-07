@@ -337,6 +337,48 @@ def predict_game(home_name: str, away_name: str) -> dict:
     xr_home = round(max(xr_home + win_quality_runs, 0.5), 2)
     xr_away = round(max(xr_away - win_quality_runs, 0.5), 2)
 
+    # ── Injury adjustment for batting lineup ─────────────────────────────────
+    #
+    # Each effectively-absent position player reduces expected runs by ~0.08
+    # (a 9-man lineup loses ~11% offensive production per missing starter;
+    # 0.08 is a conservative estimate that accounts for bench replacements).
+    # Adjustments are capped at 3 effective players to avoid over-fitting
+    # on noisy ESPN injury feeds.
+    #
+    # Note: pitcher injuries are already captured via ERA data above, so
+    # only position-player (non-pitcher) injuries are counted here.
+    home_injuries: dict = {}
+    away_injuries: dict = {}
+    try:
+        from api.espn_api import get_mlb_injuries as _espn_mlb_inj
+        home_injuries = _espn_mlb_inj(home_name) or {}
+        away_injuries = _espn_mlb_inj(away_name) or {}
+    except Exception as exc:
+        logger.debug("ESPN MLB injury fetch: %s", exc)
+
+    _RUNS_PER_PLAYER = 0.08
+    _INJ_PLAYER_CAP  = 3.0
+
+    home_pos_out = min(
+        sum(
+            p.get("out_weight", 1.0)
+            for p in home_injuries.get("players", [])
+            if p.get("position", "").upper() not in ("P", "SP", "RP")
+        ) if home_injuries.get("players") else home_injuries.get("out_count", 0.0),
+        _INJ_PLAYER_CAP,
+    )
+    away_pos_out = min(
+        sum(
+            p.get("out_weight", 1.0)
+            for p in away_injuries.get("players", [])
+            if p.get("position", "").upper() not in ("P", "SP", "RP")
+        ) if away_injuries.get("players") else away_injuries.get("out_count", 0.0),
+        _INJ_PLAYER_CAP,
+    )
+
+    xr_home = round(max(xr_home - home_pos_out * _RUNS_PER_PLAYER, 0.5), 2)
+    xr_away = round(max(xr_away - away_pos_out * _RUNS_PER_PLAYER, 0.5), 2)
+
     # Pythagorean win expectation
     denom = xr_home ** MLB_PYTH_EXP + xr_away ** MLB_PYTH_EXP
     if denom == 0:
@@ -403,4 +445,9 @@ def predict_game(home_name: str, away_name: str) -> dict:
         "starter_era_used":  starter_era_used,
         "player_props": player_props,
         "run_line": run_line,
+        # Injury data (when available)
+        "home_injuries": home_injuries.get("players", []),
+        "away_injuries": away_injuries.get("players", []),
+        "home_injury_out": round(home_injuries.get("out_count", 0.0), 2),
+        "away_injury_out": round(away_injuries.get("out_count", 0.0), 2),
     }
