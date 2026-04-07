@@ -129,10 +129,8 @@ _HIGH_RISK_SCORE = RISK_THRESHOLD_DEFAULT
 
 # ── Default parlay quality thresholds ────────────────────────────────────────
 # These are used by generate_parlay_legs() default arguments and by bot.py.
-# Raising these from their previous values (min_prob=65, MEDIA confidence)
-# improves hit rate by excluding borderline picks.
-MIN_PROB_DEFAULT    = 68.0    # minimum calibrated probability for default /parlay
-MIN_CONF_DEFAULT    = "ALTA"  # minimum confidence for default /parlay
+MIN_PROB_DEFAULT    = 65.0    # minimum calibrated probability for default /parlay
+MIN_CONF_DEFAULT    = "MEDIA"  # minimum confidence for default /parlay
 
 # ── Form-streak risk penalty ──────────────────────────────────────────────────
 # When the model picks a team to win but that team is on a notable losing streak,
@@ -1096,22 +1094,38 @@ def generate_parlay_legs(
     selected: list = []
     market_counts: dict = {}
     used_matches: set = set()
+    sport_counts: dict = {}
+
+    # Determine how many distinct sports are available in the pool
+    available_sports = {leg["sport"] for leg in pool}
 
     for leg in pool:
         if len(selected) >= max_legs:
             break
         mtype      = leg["market_type"]
         match_name = leg["match"]
+        sport      = leg["sport"]
         if match_name in used_matches:
             # Duplicate match — should not happen but guard anyway
             continue
         if not safe_mode and market_counts.get(mtype, 0) >= _MAX_SAME_MARKET:
             # Variety cap only in default mode
-            _add_excl(match_name, leg["sport"], mtype,
+            _add_excl(match_name, sport, mtype,
                       leg["raw_prob"], leg["prob"], leg["confidence"],
                       leg["risk_score"], ["VARIETY_CAP"])
             continue
+        # Sport diversity: when multiple sports are available, cap any single
+        # sport at half the max legs (rounded up) so the parlay is not
+        # dominated by one sport.
+        if not safe_mode and len(available_sports) >= 2:
+            max_per_sport = max(1, (max_legs + 1) // 2)
+            if sport_counts.get(sport, 0) >= max_per_sport:
+                _add_excl(match_name, sport, mtype,
+                          leg["raw_prob"], leg["prob"], leg["confidence"],
+                          leg["risk_score"], ["SPORT_DIVERSITY_CAP"])
+                continue
         market_counts[mtype] = market_counts.get(mtype, 0) + 1
+        sport_counts[sport] = sport_counts.get(sport, 0) + 1
         used_matches.add(match_name)
         selected.append(leg)
 

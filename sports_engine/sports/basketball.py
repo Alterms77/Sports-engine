@@ -277,6 +277,12 @@ def predict_game(home_name: str, away_name: str) -> dict:
             + NBA_HOME_ADV
             + win_quality_adj
         )
+
+        # Projected scores from efficiency model
+        expected_home = round((home_off_rtg + away_def_rtg) / 2 * avg_pace / 100 + NBA_HOME_ADV / 2, 1)
+        expected_away = round((away_off_rtg + home_def_rtg) / 2 * avg_pace / 100 - NBA_HOME_ADV / 2, 1)
+        expected_home = max(85.0, expected_home)
+        expected_away = max(85.0, expected_away)
     else:
         # Fallback: season PPG/OPPG Gaussian model
         league_avg = NBA_AVG_PPG
@@ -298,14 +304,17 @@ def predict_game(home_name: str, away_name: str) -> dict:
             + win_quality_adj
         )
 
-    home_win_prob = round(_normal_cdf(expected_margin / NBA_SIGMA) * 100, 1)
-    away_win_prob = round(100 - home_win_prob, 1)
+        # Projected scores from PPG/OPPG model
+        expected_home = round(league_avg + home_off - away_def + NBA_HOME_ADV / 2, 1)
+        expected_away = round(league_avg + away_off - home_def - NBA_HOME_ADV / 2, 1)
+        expected_home = max(85.0, expected_home)
+        expected_away = max(85.0, expected_away)
 
-    # Projected scores
-    expected_home = round(league_avg + home_off - away_def + NBA_HOME_ADV / 2, 1)
-    expected_away = round(league_avg + away_off - home_def - NBA_HOME_ADV / 2, 1)
-    expected_home = max(85.0, expected_home)
-    expected_away = max(85.0, expected_away)
+    home_win_prob = round(_normal_cdf(expected_margin / NBA_SIGMA) * 100, 1)
+    # Cap: NBA regular season max realistic win probability
+    home_win_prob = min(home_win_prob, 75.0)
+    home_win_prob = max(home_win_prob, 25.0)
+    away_win_prob = round(100 - home_win_prob, 1)
     over_under = round(expected_home + expected_away, 1)
 
     favoured = home_name if expected_margin >= 0 else away_name

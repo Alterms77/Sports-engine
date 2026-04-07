@@ -343,6 +343,9 @@ def predict_game(home_name: str, away_name: str) -> dict:
         home_win_prob = 50.0
     else:
         home_win_prob = round((xr_home ** MLB_PYTH_EXP / denom) * 100, 1)
+    # Cap: MLB realistic win probability range
+    home_win_prob = min(home_win_prob, 68.0)
+    home_win_prob = max(home_win_prob, 32.0)
     away_win_prob = round(100 - home_win_prob, 1)
 
     over_under = round(xr_home + xr_away, 1)

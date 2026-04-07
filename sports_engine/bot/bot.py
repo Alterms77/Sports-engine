@@ -810,7 +810,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "  _Ej:_ `/pregunta ¿Cómo afecta la baja de Haaland al City?`\n\n"
         "🔹 `/ai_picks` — Top 3 picks del día con justificación IA\n"
         "  Analiza todos los partidos del día y detecta valor real.\n\n"
-        "  ⚠️ _Requiere `OPENAI_API_KEY` configurado en variables de entorno._\n\n"
+        "  ⚠️ _Requiere `GEMINI_API_KEY` configurado en variables de entorno._\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "📖 *Ayuda — Sports Engine*\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
@@ -3044,58 +3044,56 @@ async def parlay_dream_command(update: Update, context: ContextTypes.DEFAULT_TYP
 # ── Parlay photo / text analyzer ─────────────────────────────────────────────
 
 
-def _extract_text_from_image_openai(image_bytes: bytes) -> str:
-    """Use OpenAI GPT-4 Vision to extract parlay legs from a ticket image.
+def _extract_text_from_image_gemini(image_bytes: bytes) -> str:
+    """Use Google Gemini Vision to extract parlay legs from a ticket image.
 
-    Requires ``OPENAI_API_KEY`` environment variable.  Returns the raw text
+    Requires ``GEMINI_API_KEY`` environment variable.  Returns the raw text
     extracted by the model (one leg per line) or raises on any error.
     """
     import base64
     import json
-    api_key = os.environ.get("OPENAI_API_KEY", "")
+    api_key = os.environ.get("GEMINI_API_KEY", "")
     if not api_key:
-        raise RuntimeError("OPENAI_API_KEY not configured")
+        raise RuntimeError("GEMINI_API_KEY not configured")
 
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     import requests as _req
     payload = {
-        "model": "gpt-4o",
-        "max_tokens": 500,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            "This is a sports betting parlay ticket. "
-                            "Extract each leg of the parlay and output one leg per line "
-                            "in this exact format:\n"
-                            "Team A vs Team B | Pick/Market | @Odds\n\n"
-                            "Examples:\n"
-                            "Lakers vs Celtics | Lakers ML | @1.85\n"
-                            "Real Madrid vs Barcelona | Over 2.5 Goals | @1.72\n"
-                            "Chiefs vs Eagles | Chiefs -3.5 | @1.90\n\n"
-                            "Output ONLY the legs, one per line. No extra text."
-                        ),
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-                    },
-                ],
-            }
-        ],
+        "contents": [{
+            "parts": [
+                {
+                    "text": (
+                        "This is a sports betting parlay ticket. "
+                        "Extract each leg of the parlay and output one leg per line "
+                        "in this exact format:\n"
+                        "Team A vs Team B | Pick/Market | @Odds\n\n"
+                        "Examples:\n"
+                        "Lakers vs Celtics | Lakers ML | @1.85\n"
+                        "Real Madrid vs Barcelona | Over 2.5 Goals | @1.72\n"
+                        "Chiefs vs Eagles | Chiefs -3.5 | @1.90\n\n"
+                        "Output ONLY the legs, one per line. No extra text."
+                    ),
+                },
+                {
+                    "inline_data": {
+                        "mime_type": "image/jpeg",
+                        "data": b64,
+                    }
+                },
+            ]
+        }],
     }
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     resp = _req.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        url,
+        headers={"Content-Type": "application/json"},
         json=payload,
         timeout=30,
     )
     resp.raise_for_status()
     data = resp.json()
-    return data["choices"][0]["message"]["content"].strip()
+    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 
 async def photo_parlay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3103,7 +3101,7 @@ async def photo_parlay_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     Strategy (in order of preference):
     1. If the photo has a *caption*, parse the caption directly.
-    2. If ``OPENAI_API_KEY`` is set, download the photo and use GPT-4o Vision
+    2. If ``GEMINI_API_KEY`` is set, download the photo and use Gemini Vision
        to extract the parlay legs from the image automatically.
     3. Otherwise, reply with format instructions asking the user to re-send
        with a text caption.
@@ -3120,14 +3118,14 @@ async def photo_parlay_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # ── If no caption, try to read the image directly ─────────────────────
     if not text_to_parse:
-        openai_key = os.environ.get("OPENAI_API_KEY", "")
-        if not openai_key:
+        gemini_key = os.environ.get("GEMINI_API_KEY", "")
+        if not gemini_key:
             # No caption, no vision API — ask the user to add a caption
             await update.message.reply_text(
                 "📸 *Cómo analizar tu parlay*\n\n"
                 "Envía la foto *con un caption* describiendo cada pata, "
                 "o activa la lectura automática de imágenes configurando "
-                "`OPENAI_API_KEY` en las variables de entorno del bot.\n\n"
+                "`GEMINI_API_KEY` en las variables de entorno del bot.\n\n"
                 "*Formato del caption (una pata por línea):*\n"
                 "`Lakers vs Celtics | Lakers ML | @1.85`\n"
                 "`Real Madrid vs Barcelona | Over 2.5 | @1.72`\n"
@@ -3145,8 +3143,8 @@ async def photo_parlay_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             buf = io.BytesIO()
             await photo_file.download_to_memory(buf)
             image_bytes = buf.getvalue()
-            text_to_parse = _extract_text_from_image_openai(image_bytes)
-            logger.info("GPT-4o Vision extracted %d chars from parlay image", len(text_to_parse))
+            text_to_parse = _extract_text_from_image_gemini(image_bytes)
+            logger.info("Gemini Vision extracted %d chars from parlay image", len(text_to_parse))
         except Exception as exc:
             logger.warning("Photo OCR failed: %s", exc)
             await update.message.reply_text(
@@ -5005,9 +5003,9 @@ async def ai_picks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /ai_picks — AI picks summary for today's matches.
 
-    Fetches today's schedule, runs statistical predictions, then asks GPT to
+    Fetches today's schedule, runs statistical predictions, then asks Gemini to
     identify the top 3 value picks with statistical justification.
-    Requires OPENAI_API_KEY; gracefully shows a fallback if not configured.
+    Requires GEMINI_API_KEY; gracefully shows a fallback if not configured.
     """
     from core.ai_analysis import ai_picks_summary
 
