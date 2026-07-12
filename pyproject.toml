@@ -1,0 +1,139 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sports-engine"
+version = "1.0.0"
+description = "AI-powered sports betting prediction bot with live data, arbitrage detection, and multi-sport analysis"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Alterms77", email = "contact@alterms77.dev"},
+]
+keywords = [
+    "betting",
+    "sports",
+    "predictions",
+    "telegram",
+    "arbitrage",
+    "ai",
+    "soccer",
+    "nba",
+    "mlb",
+    "nfl",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Other Audience",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Games/Entertainment",
+]
+requires-python = ">=3.9"
+
+dependencies = [
+    "python-telegram-bot[job-queue]>=20.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.28.0",
+    "psycopg[binary]>=3.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0",
+    "pytest-cov>=7.0",
+    "pytest-mock>=3.10.0",
+    "responses>=0.23.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.0.0",
+    "types-requests>=2.28.0",
+]
+
+prod = [
+    "gunicorn>=20.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Alterms77/Sports-engine"
+Repository = "https://github.com/Alterms77/Sports-engine.git"
+Issues = "https://github.com/Alterms77/Sports-engine/issues"
+
+[tool.setuptools]
+packages = ["sports_engine"]
+
+[tool.black]
+line-length = 120
+target-version = ["py39", "py310", "py311", "py312"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 120
+multi_line_mode = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_any_generics = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-p no:warnings --tb=short -v"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["sports_engine"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
